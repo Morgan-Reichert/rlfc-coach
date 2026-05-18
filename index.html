@@ -28,6 +28,18 @@ textarea{resize:vertical;}
 .no-scrollbar::-webkit-scrollbar{display:none;}
 .no-scrollbar{-ms-overflow-style:none;scrollbar-width:none;}
 .scroll-y{overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;}
+/* Composition responsive grid: 1 column on mobile, 2 columns on tablet/desktop */
+.compo-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start;}
+@media (min-width: 860px){
+  .compo-grid{grid-template-columns:minmax(0,1fr) 300px;}
+}
+@media (min-width: 1200px){
+  .compo-grid{grid-template-columns:minmax(0,1fr) 340px;}
+}
+.compo-side{position:sticky;top:0;}
+@media (max-width: 859px){
+  .compo-side{position:static;}
+}
 /* Mobile-aware app shell: visible viewport on browsers with URL bar */
 .app-shell{
   width:100vw; width:100dvw;
@@ -4208,105 +4220,119 @@ function CompositionView({ match, setMatch, lineup, form, players, T, available,
         </Card>
       )}
 
-      {/* FORMATION FIELD (interactive) */}
-      <Card padding={14} style={{ marginBottom:14 }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
-          <div style={{
-            display:'inline-flex', alignItems:'center', gap:6,
-            padding:'4px 11px', borderRadius:7,
-            background:T.accent+'15', color:T.accent,
-            fontSize:12, fontWeight:700, letterSpacing:0.2,
-          }}>
-            <Icon name="brain" size={13}/>
-            {form.label}
+      {/* 2-COLUMN LAYOUT: field LEFT, bench/lists RIGHT (on wide screens) */}
+      <div className="compo-grid">
+        {/* LEFT: Field */}
+        <Card padding={14}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+            <div style={{
+              display:'inline-flex', alignItems:'center', gap:6,
+              padding:'4px 11px', borderRadius:7,
+              background:T.accent+'15', color:T.accent,
+              fontSize:12, fontWeight:700, letterSpacing:0.2,
+            }}>
+              <Icon name="brain" size={13}/>
+              {form.label}
+            </div>
+            <div style={{ fontSize:11, color:T.text3, fontWeight:600, fontStyle:'italic' }}>
+              {form.desc}
+            </div>
           </div>
-          <div style={{ fontSize:11, color:T.text3, fontWeight:600, fontStyle:'italic' }}>
-            {form.desc}
+          <InteractiveField
+            form={form} lineup={lineup} players={players} T={T}
+            selectedPid={selectedPid} onSlotClick={slotClick}/>
+          <div style={{ marginTop:10, padding:'8px 12px', background:selectedPid?T.accentLight:T.card2, borderRadius:8, fontSize:11.5, color:selectedPid?T.accent:T.text2, textAlign:'center', lineHeight:1.4, transition:'all 0.15s', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+            {selectedPid ? (
+              <><Icon name="info" size={12}/><strong>Tape une case</strong> pour placer le joueur sélectionné</>
+            ) : (
+              <><Icon name="info" size={12}/>Tape un joueur, puis tape une case du terrain</>
+            )}
           </div>
-        </div>
-        <InteractiveField
-          form={form} lineup={lineup} players={players} T={T}
-          selectedPid={selectedPid} onSlotClick={slotClick}/>
-        <div style={{ marginTop:10, padding:'8px 12px', background:selectedPid?T.accentLight:T.card2, borderRadius:8, fontSize:11.5, color:selectedPid?T.accent:T.text2, textAlign:'center', lineHeight:1.4, transition:'all 0.15s', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-          {selectedPid ? (
-            <><Icon name="info" size={12}/><strong>Tape une case</strong> pour placer le joueur sélectionné</>
+        </Card>
+
+        {/* RIGHT: Sidebar with bench/dispos/absents */}
+        <div className="compo-side">
+          {players.length === 0 ? (
+            <Card>
+              <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
+            </Card>
           ) : (
-            <><Icon name="info" size={12}/>Tape un joueur, puis tape une case du terrain</>
+            <Card padding={12}>
+              <PlayerListSection title="Disponibles" subtitle={`${available.length} non affecté(s)`} icon="users"
+                players={available} T={T} colorKey="info"
+                selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+                emptyText="Tous les joueurs sont affectés" compact={true}/>
+
+              <div style={{ height:1, background:T.border, margin:'12px 0' }}/>
+
+              <PlayerListSection title="Banc" subtitle={`${benchPlayers.length} remplaçant(s)`} icon="clipboard"
+                players={benchPlayers} T={T} colorKey="warning"
+                selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+                emptyText="Aucun remplaçant" compact={true}/>
+
+              <div style={{ height:1, background:T.border, margin:'12px 0' }}/>
+
+              <PlayerListSection title="Absents" subtitle={`${absentPlayers.length} non disponible(s)`} icon="close"
+                players={absentPlayers} T={T} colorKey="danger"
+                selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+                emptyText="Aucun absent" compact={true}/>
+            </Card>
           )}
         </div>
-      </Card>
-
-      {/* PLAYER LISTS */}
-      {players.length === 0 ? (
-        <Card>
-          <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
-        </Card>
-      ) : (
-        <Card padding={14}>
-          <PlayerListSection title="Disponibles" subtitle="Pas encore affectés" icon="users"
-            players={available} T={T} colorKey="info"
-            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-            emptyText="Tous les joueurs sont affectés"/>
-
-          <div style={{ height:1, background:T.border, margin:'14px 0' }}/>
-
-          <PlayerListSection title="Banc" subtitle="Remplaçants pendant le match" icon="clipboard"
-            players={benchPlayers} T={T} colorKey="warning"
-            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-            emptyText="Aucun remplaçant"/>
-
-          <div style={{ height:1, background:T.border, margin:'14px 0' }}/>
-
-          <PlayerListSection title="Absents" subtitle="Non disponibles pour ce match" icon="close"
-            players={absentPlayers} T={T} colorKey="danger"
-            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-            emptyText="Tous les joueurs sont disponibles"/>
-        </Card>
-      )}
+      </div>
     </div>
   );
 }
 
-function PlayerListSection({ title, subtitle, icon, players, T, colorKey, selectedPid, onPlayerClick, emptyText }) {
+function PlayerListSection({ title, subtitle, icon, players, T, colorKey, selectedPid, onPlayerClick, emptyText, compact=false }) {
   const color = T[colorKey];
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
         <div style={{
-          width:28, height:28, borderRadius:8,
+          width:24, height:24, borderRadius:7,
           background: color+'1F', color,
-          display:'flex', alignItems:'center', justifyContent:'center',
-        }}><Icon name={icon} size={15}/></div>
-        <div>
-          <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{title} <span style={{ color:T.text2, fontWeight:600 }}>({players.length})</span></div>
-          <div style={{ fontSize:10.5, color:T.text2 }}>{subtitle}</div>
+          display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+        }}><Icon name={icon} size={13}/></div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:T.text, letterSpacing:0.2, textTransform:'uppercase' }}>
+            {title} <span style={{ color, fontWeight:800 }}>{players.length}</span>
+          </div>
+          {!compact && <div style={{ fontSize:10.5, color:T.text2 }}>{subtitle}</div>}
         </div>
       </div>
       {players.length === 0 ? (
-        <div style={{ padding:'12px 14px', background:T.card2, borderRadius:8, fontSize:12, color:T.text3, textAlign:'center', fontStyle:'italic' }}>
+        <div style={{ padding:'8px 10px', background:T.card2, borderRadius:7, fontSize:11, color:T.text3, textAlign:'center', fontStyle:'italic' }}>
           {emptyText}
         </div>
       ) : (
-        <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+        <div style={{ display:'flex', flexDirection: compact ? 'column' : 'row', flexWrap: compact ? 'nowrap' : 'wrap', gap:4 }}>
           {players.map(p => {
             const isSelected = selectedPid === p.id;
             const pos = POSITIONS.find(x => x.id === p.position);
             return (
               <button key={p.id} onClick={()=>onPlayerClick(p.id)}
                 style={{
-                  display:'flex', alignItems:'center', gap:7,
-                  padding:'5px 12px 5px 5px',
+                  display:'flex', alignItems:'center', gap:7, width:'100%',
+                  padding:'5px 9px 5px 5px',
                   background: isSelected ? T.accent : T.card2,
                   color: isSelected ? '#fff' : T.text,
                   border:`1.5px solid ${isSelected ? T.accent : T.border}`,
-                  borderRadius:999, cursor:'pointer',
+                  borderRadius: compact ? 8 : 999, cursor:'pointer',
                   transition:'all 0.12s',
-                  fontWeight:600,
+                  fontWeight:600, textAlign:'left',
                 }}>
-                <Avatar name={`${p.firstName} ${p.lastName}`} size={26} color={pos?.color}/>
-                <span style={{ fontSize:12 }}>
-                  #{p.number||'?'} {p.lastName || p.firstName}
+                <Avatar name={`${p.firstName} ${p.lastName}`} size={24} color={pos?.color}/>
+                <span style={{ fontSize:12, flex:1, minWidth:0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                  <span style={{ opacity:0.7, fontWeight:700 }}>#{p.number||'?'}</span> {p.lastName || p.firstName}
                 </span>
+                {!isSelected && pos && (
+                  <span style={{
+                    fontSize:9, padding:'2px 6px', borderRadius:5,
+                    background: pos.color+'25', color: pos.color,
+                    fontWeight:800, letterSpacing:0.3,
+                  }}>{pos.short}</span>
+                )}
               </button>
             );
           })}
@@ -4320,15 +4346,13 @@ function PlayerListSection({ title, subtitle, icon, players, T, colorKey, select
    INTERACTIVE FIELD (tap-to-place)
 ============================================================ */
 function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, compact=false }) {
-  /* HORIZONTAL field — own goal LEFT, attack RIGHT
-     Proportions adaptées au format papier (paysage 8v8 ratio ~3:2)
-  */
-  const maxW = compact ? 380 : 460;
+  /* HORIZONTAL field — own goal LEFT, attack RIGHT */
+  const paddingBottom = compact ? '54%' : '58%';
   return (
     <div style={{
       position:'relative', width:'100%',
-      paddingBottom:'62%',
-      maxWidth: maxW, margin:'0 auto',
+      paddingBottom,
+      margin:'0 auto',
       background:`
         radial-gradient(ellipse at center, rgba(255,255,255,0.04) 0%, transparent 70%),
         linear-gradient(90deg, #0c5e2f 0%, #0f7842 50%, #0c5e2f 100%)
