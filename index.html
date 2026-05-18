@@ -490,15 +490,77 @@ const MATCH_DURATIONS = [
 ];
 
 const EVENT_TYPES = [
-  { id:'goal',     label:'But',          icon:'ball',         color:'#34C759' },
-  { id:'assist',   label:'Passe déc.',   icon:'target',       color:'#0A84FF' },
-  { id:'yellow',   label:'Carton jaune', icon:'cardYellow',   color:'#F59E0B' },
-  { id:'red',      label:'Carton rouge', icon:'cardRed',      color:'#FF3B30' },
-  { id:'sub_in',   label:'Entre',        icon:'arrowUp',      color:'#34C759' },
-  { id:'sub_out',  label:'Sort',         icon:'arrowDown',    color:'#FF453A' },
-  { id:'save',     label:'Arrêt',        icon:'glove',        color:'#AF52DE' },
-  { id:'incident', label:'Incident',     icon:'alert',        color:'#FF9500' },
+  { id:'goal',         label:'But',           icon:'ball',         color:'#34C759', sideUs:true },
+  { id:'goal_against', label:'But encaissé',  icon:'net',          color:'#FF453A', sideUs:false },
+  { id:'assist',       label:'Passe déc.',    icon:'target',       color:'#0A84FF', sideUs:true },
+  { id:'yellow',       label:'Carton jaune',  icon:'cardYellow',   color:'#F59E0B', sideUs:true },
+  { id:'red',          label:'Carton rouge',  icon:'cardRed',      color:'#FF3B30', sideUs:true },
+  { id:'sub',          label:'Changement',    icon:'substitution', color:'#0A84FF', sideUs:true },
+  { id:'save',         label:'Arrêt',         icon:'glove',        color:'#AF52DE', sideUs:true },
+  { id:'incident',     label:'Incident',      icon:'alert',        color:'#FF9500', sideUs:true },
 ];
+
+/* ============================================================
+   LINEUP HELPERS — slot-based (sparse array, length = formation.slots)
+============================================================ */
+function getFormation(formationId) {
+  return FORMATIONS_8V8.find(f => f.id === formationId) || FORMATIONS_8V8[0];
+}
+/* Returns lineup array of length = slots.length, with null for empty slots */
+function ensureLineupArray(match) {
+  const form = getFormation(match.formation);
+  const N = form.slots.length;
+  let lineup = Array.isArray(match.lineup) ? [...match.lineup] : [];
+  // pad to length N
+  while (lineup.length < N) lineup.push(null);
+  // truncate if too long, push extras to bench
+  if (lineup.length > N) lineup = lineup.slice(0, N);
+  // normalize: replace undefined with null
+  for (let i = 0; i < N; i++) if (lineup[i] === undefined) lineup[i] = null;
+  return lineup;
+}
+function lineupPids(lineup) {
+  return (lineup || []).filter(Boolean);
+}
+function setLineupSlot(lineup, slotIdx, pid) {
+  const next = [...lineup];
+  next[slotIdx] = pid;
+  return next;
+}
+function clearPidFromLineup(lineup, pid) {
+  return lineup.map(x => x === pid ? null : x);
+}
+function autoCompose(match, players) {
+  /* Auto-place players matching slot position when possible */
+  const form = getFormation(match.formation);
+  const lineup = Array(form.slots.length).fill(null);
+  const taken = new Set();
+  // First pass: exact position match
+  form.slots.forEach((slot, i) => {
+    const candidate = players.find(p =>
+      !taken.has(p.id) &&
+      !match.absent.includes(p.id) &&
+      p.position === slot.pos
+    );
+    if (candidate) { lineup[i] = candidate.id; taken.add(candidate.id); }
+  });
+  // Second pass: fill remaining slots with any available player
+  form.slots.forEach((slot, i) => {
+    if (lineup[i]) return;
+    const candidate = players.find(p =>
+      !taken.has(p.id) &&
+      !match.absent.includes(p.id)
+    );
+    if (candidate) { lineup[i] = candidate.id; taken.add(candidate.id); }
+  });
+  // Rest go to bench
+  const benchSet = new Set(match.bench);
+  players.forEach(p => {
+    if (taken.has(p.id) || match.absent.includes(p.id)) return;
+    benchSet.add(p.id);
+  });
+  return { ...match, lineup, bench: Array.from(benchSet) };
+}
 
 /* ============================================================
    EXERCISES LIBRARY - 50 préfaits
@@ -3298,8 +3360,9 @@ function ExercisesLibrary({ onBack, T }) {
    MATCH PAGE
 ============================================================ */
 function MatchPage({ matches, setMatches, players, T, showToast }) {
-  const [view, setView] = useState('list'); // list | edit | live
+  const [view, setView] = useState('list'); // list | edit | live | recap
   const [editing, setEditing] = useState(null);
+  const [recapMatch, setRecapMatch] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [tabs, setTabs] = useState(0); // 0=upcoming 1=done 2=all
 
@@ -3312,8 +3375,22 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
     return result;
   }, [matches, tabs]);
 
-  function startNew() { setEditing({ ...newMatch() }); setView('edit'); }
-  function startEdit(m) { setEditing({ ...m }); setView('edit'); }
+  function startNew() {
+    const m = newMatch();
+    m.lineup = ensureLineupArray(m);
+    setEditing(m); setView('edit'); setRecapMatch(null);
+  }
+  function startEdit(m) {
+    const copy = { ...m, lineup: ensureLineupArray(m) };
+    setEditing(copy); setView('edit'); setRecapMatch(null);
+  }
+  function openMatch(m) {
+    if (m.status === 'done') {
+      setRecapMatch(m); setView('recap');
+    } else {
+      startEdit(m);
+    }
+  }
   function saveMatch() {
     if (!editing) return;
     setMatches(prev => {
@@ -3321,16 +3398,22 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
       if (idx >= 0) { const copy=[...prev]; copy[idx]=editing; return copy; }
       return [...prev, editing];
     });
-    setEditing(null); setView('list');
+    if (editing.status === 'done') {
+      setRecapMatch(editing); setView('recap');
+    } else {
+      setView('list');
+    }
+    setEditing(null);
     showToast('Match enregistré', 'success');
   }
   function deleteMatch(m) {
     setMatches(prev => prev.filter(x => x.id !== m.id));
     setConfirmDelete(null);
     if (editing && editing.id===m.id) { setEditing(null); setView('list'); }
+    if (recapMatch && recapMatch.id===m.id) { setRecapMatch(null); setView('list'); }
   }
   function startLive(m) {
-    const liveMatch = { ...m, status:'live' };
+    const liveMatch = { ...m, status:'live', lineup: ensureLineupArray(m) };
     setEditing(liveMatch);
     setView('live');
   }
@@ -3341,13 +3424,26 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
       if (idx >= 0) { const copy=[...prev]; copy[idx]=finalMatch; return copy; }
       return [...prev, finalMatch];
     });
-    setEditing(null); setView('list');
+    setRecapMatch(finalMatch); setEditing(null); setView('recap');
     showToast('Match terminé !', 'success');
+  }
+
+  if (view === 'recap' && recapMatch) {
+    const fresh = matches.find(m => m.id === recapMatch.id) || recapMatch;
+    return <MatchRecap match={fresh} players={players} T={T}
+      onBack={()=>{ setRecapMatch(null); setView('list'); }}
+      onEdit={()=>startEdit(fresh)}
+      onDelete={()=>setConfirmDelete(fresh)}
+      confirmDelete={confirmDelete} setConfirmDelete={setConfirmDelete} deleteMatch={deleteMatch}/>;
   }
 
   if (view === 'edit' && editing) {
     return <MatchEditor match={editing} setMatch={setEditing}
-      onSave={saveMatch} onCancel={()=>{setEditing(null);setView('list');}}
+      onSave={saveMatch}
+      onCancel={()=>{
+        if (recapMatch) { setView('recap'); } else { setView('list'); }
+        setEditing(null);
+      }}
       onDelete={()=>setConfirmDelete(editing)}
       onLive={()=>{ saveMatch(); startLive(editing); }}
       players={players} T={T}
@@ -3372,54 +3468,12 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
             action={tabs===0 && <Btn onClick={startNew} icon="plus">Créer un match</Btn>}/>
         </Card>
       ) : (
-        <div style={{ display:'grid', gap:10 }}>
-          {filteredMatches.map(m => {
-            const mt = MATCH_TYPES.find(t=>t.id===m.type);
-            const result = m.status==='done' ? (m.score.us > m.score.them ? 'V' : (m.score.us < m.score.them ? 'D' : 'N')) : null;
-            const resultColor = result==='V' ? T.success : result==='D' ? T.danger : (result==='N' ? T.warning : T.info);
-            return (
-              <Card key={m.id} padding={14} hoverable onClick={()=>startEdit(m)}>
-                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-                  <div style={{
-                    width:54, height:54, borderRadius:14,
-                    background: result ? resultColor : mt.color+'25',
-                    color: result ? '#fff' : mt.color,
-                    display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-                    flexShrink:0,
-                  }}>
-                    {result ? (
-                      <div style={{ fontSize:20, fontWeight:800 }}>{result}</div>
-                    ) : (
-                      <>
-                        <div style={{ fontSize:18, fontWeight:800, lineHeight:1 }}>{new Date(m.date).getDate()}</div>
-                        <div style={{ fontSize:9, fontWeight:700, textTransform:'uppercase', marginTop:2 }}>{new Date(m.date).toLocaleDateString('fr-FR',{month:'short'}).replace('.','')}</div>
-                      </>
-                    )}
-                  </div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4, flexWrap:'wrap' }}>
-                      <Badge bg={mt.color+'25'} color={mt.color}>{mt.label}</Badge>
-                      <Badge bg={T.card3} color={T.text2}>{m.domicile?'Dom':'Ext'}</Badge>
-                      {m.status==='live' && <Badge bg={T.dangerLight} color={T.danger}><span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span> LIVE</Badge>}
-                    </div>
-                    <div style={{ fontSize:15, fontWeight:700, color:T.text }}>
-                      {m.status==='done' ? (
-                        <>RLFC {m.score.us} – {m.score.them} {m.opponent || 'Adv.'}</>
-                      ) : (
-                        <>vs {m.opponent || 'Adversaire'}</>
-                      )}
-                    </div>
-                    <div style={{ fontSize:12, color:T.text2, marginTop:2 }}>{dateFmt(m.date)} · {m.time}</div>
-                  </div>
-                  {m.status === 'prepared' && (
-                    <IconBtn icon="play" title="Live"
-                      bg={T.successLight} color={T.success}
-                      onClick={(e)=>{ e.stopPropagation(); startLive(m); }}/>
-                  )}
-                </div>
-              </Card>
-            );
-          })}
+        <div style={{ display:'grid', gap:12 }}>
+          {filteredMatches.map(m => (
+            <MatchListCard key={m.id} match={m} players={players} T={T}
+              onClick={()=>openMatch(m)}
+              onLive={()=>startLive(m)}/>
+          ))}
         </div>
       )}
 
@@ -3431,56 +3485,253 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
 }
 
 /* ============================================================
+   MATCH LIST CARD (carte enrichie pour la liste des matchs)
+============================================================ */
+function MatchListCard({ match: m, players, T, onClick, onLive }) {
+  const mt = MATCH_TYPES.find(t=>t.id===m.type);
+  const isDone = m.status === 'done';
+  const isLive = m.status === 'live';
+  const result = isDone ? (m.score.us > m.score.them ? 'V' : (m.score.us < m.score.them ? 'D' : 'N')) : null;
+  const resultColor = result==='V' ? T.success : result==='D' ? T.danger : (result==='N' ? T.warning : T.info);
+
+  const topScorers = useMemo(() => {
+    if (!isDone) return [];
+    const goals = {};
+    (m.events||[]).filter(ev => ev.type === 'goal' && ev.playerId).forEach(ev => {
+      goals[ev.playerId] = (goals[ev.playerId]||0) + 1;
+    });
+    return Object.entries(goals)
+      .sort((a,b) => b[1]-a[1])
+      .slice(0, 3)
+      .map(([pid, n]) => ({ player: players.find(p => p.id === pid), goals:n }))
+      .filter(x => x.player);
+  }, [isDone, m.events, players]);
+
+  const daysUntil = useMemo(() => {
+    if (isDone || isLive) return null;
+    const today = new Date(); today.setHours(0,0,0,0);
+    const mDate = new Date(m.date); mDate.setHours(0,0,0,0);
+    return Math.round((mDate - today) / 86400000);
+  }, [isDone, isLive, m.date]);
+
+  const lineupCount = (m.lineup || []).filter(Boolean).length;
+
+  return (
+    <Card padding={0} hoverable onClick={onClick} style={{ overflow:'hidden' }}>
+      <div style={{ height:4, background: isDone ? resultColor : (isLive ? T.danger : mt.color) }}/>
+      <div style={{ padding:'14px 16px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+          {isDone ? (
+            <div style={{
+              width:68, padding:'8px 4px', borderRadius:12,
+              background: resultColor, color:'#fff', textAlign:'center', flexShrink:0,
+            }}>
+              <div style={{ fontSize:10, fontWeight:700, opacity:0.9, letterSpacing:0.4 }}>{result==='V'?'VICTOIRE':result==='D'?'DÉFAITE':'NUL'}</div>
+              <div style={{ fontSize:22, fontWeight:800, lineHeight:1, fontVariantNumeric:'tabular-nums', marginTop:3 }}>{m.score.us}–{m.score.them}</div>
+            </div>
+          ) : (
+            <div style={{
+              width:68, padding:'8px 4px', borderRadius:12,
+              background: (isLive?T.danger:mt.color)+'18',
+              color: isLive?T.danger:mt.color, textAlign:'center', flexShrink:0,
+              border:`1px solid ${(isLive?T.danger:mt.color)}40`,
+            }}>
+              <div style={{ fontSize:22, fontWeight:800, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{new Date(m.date).getDate()}</div>
+              <div style={{ fontSize:10, fontWeight:700, textTransform:'uppercase', marginTop:3, letterSpacing:0.3 }}>{new Date(m.date).toLocaleDateString('fr-FR',{month:'short'}).replace('.','')}</div>
+            </div>
+          )}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:5, flexWrap:'wrap' }}>
+              <Badge bg={mt.color+'1F'} color={mt.color}>{mt.label}</Badge>
+              <Badge bg={T.card3} color={T.text2}><Icon name="pin" size={10}/> {m.domicile?'Domicile':'Extérieur'}</Badge>
+              {isLive && <Badge bg={T.dangerLight} color={T.danger}><span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span> LIVE</Badge>}
+              {!isDone && !isLive && daysUntil !== null && (
+                <Badge bg={daysUntil<=2?T.warningLight:T.card3} color={daysUntil<=2?T.warning:T.text2}>
+                  {daysUntil === 0 ? "Aujourd'hui" : daysUntil === 1 ? 'Demain' : daysUntil > 1 ? `J-${daysUntil}` : `J+${-daysUntil}`}
+                </Badge>
+              )}
+            </div>
+            <div style={{ fontSize:16, fontWeight:800, color:T.text, letterSpacing:-0.2, lineHeight:1.2 }}>
+              {isDone ? (
+                <span>RLFC <span style={{ color:resultColor }}>{m.score.us}</span><span style={{ color:T.text3, padding:'0 4px' }}>–</span><span style={{ color:result==='D'?resultColor:T.text }}>{m.score.them}</span> {m.opponent || 'Adv.'}</span>
+              ) : (
+                <span>vs {m.opponent || 'Adversaire'}</span>
+              )}
+            </div>
+            <div style={{ fontSize:12, color:T.text2, marginTop:4, display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+              <Icon name="clock" size={11} color={T.text2}/>{m.time}
+              {m.location && (<><span style={{ color:T.text3 }}>·</span><Icon name="pin" size={11} color={T.text2}/>{m.location}</>)}
+              {!isDone && lineupCount > 0 && (<><span style={{ color:T.text3 }}>·</span><Icon name="users" size={11} color={T.text2}/>{lineupCount}/8 titulaires</>)}
+            </div>
+          </div>
+          {!isDone && !isLive && (
+            <IconBtn icon="play" title="Lancer le match"
+              bg={T.success+'18'} color={T.success}
+              onClick={(e)=>{ e.stopPropagation(); onLive(); }}/>
+          )}
+          {isDone && <Icon name="chevronRight" size={18} color={T.text3}/>}
+        </div>
+        {isDone && topScorers.length > 0 && (
+          <div style={{
+            marginTop:10, paddingTop:10, borderTop:`1px solid ${T.border}`,
+            display:'flex', flexWrap:'wrap', gap:6, alignItems:'center',
+          }}>
+            <Icon name="ball" size={12} color={T.text2}/>
+            {topScorers.map(({ player, goals }) => (
+              <span key={player.id} style={{
+                display:'inline-flex', alignItems:'center', gap:4,
+                padding:'3px 9px', borderRadius:999, background:T.card2,
+                fontSize:11, fontWeight:600, color:T.text,
+                border:`1px solid ${T.border}`,
+              }}>
+                {player.firstName} {player.lastName ? player.lastName[0]+'.' : ''}
+                {goals > 1 && <span style={{ color:T.text2, fontWeight:700 }}>×{goals}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ====================================================
    MATCH EDITOR (préparation)
 ============================================================ */
 function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, players, T, confirmDelete, setConfirmDelete, deleteMatch }) {
   const [tab, setTab] = useState(0);
+  const [selectedPid, setSelectedPid] = useState(null); // joueur sélectionné pour placement
 
-  const availablePlayers = players.filter(p => !match.absent.includes(p.id));
+  // Ensure lineup is positional array
+  const lineup = useMemo(() => ensureLineupArray(match), [match.lineup, match.formation]);
+  const form = useMemo(() => getFormation(match.formation), [match.formation]);
+  const lineupSet = useMemo(() => new Set(lineupPids(lineup)), [lineup]);
 
-  function togglePlayer(pid, list) {
-    const inLineup = match.lineup.includes(pid);
-    const inBench = match.bench.includes(pid);
-    const inAbsent = match.absent.includes(pid);
-
-    let newLineup = match.lineup.filter(x => x !== pid);
-    let newBench = match.bench.filter(x => x !== pid);
-    let newAbsent = match.absent.filter(x => x !== pid);
-
-    if (list === 'lineup') {
-      if (!inLineup) {
-        if (newLineup.length >= 8) {
-          alert('Maximum 8 titulaires pour le 8v8');
-          return;
-        }
-        newLineup.push(pid);
-      }
-    } else if (list === 'bench') {
-      if (!inBench) newBench.push(pid);
-    } else if (list === 'absent') {
-      if (!inAbsent) newAbsent.push(pid);
+  // Re-sync lineup if formation changed (preserve players, push extras to bench)
+  useEffect(() => {
+    const N = form.slots.length;
+    if ((match.lineup||[]).length !== N) {
+      const old = match.lineup || [];
+      const newLineup = Array(N).fill(null);
+      // copy players up to N
+      for (let i = 0; i < Math.min(old.length, N); i++) newLineup[i] = old[i] || null;
+      // push extras to bench
+      const extras = old.slice(N).filter(Boolean);
+      const newBench = [...(match.bench||[]), ...extras.filter(p => !(match.bench||[]).includes(p))];
+      setMatch({ ...match, lineup: newLineup, bench: newBench });
     }
-    setMatch({ ...match, lineup:newLineup, bench:newBench, absent:newAbsent });
+  }, [match.formation]);
+
+  // Lists derived
+  const available = players.filter(p =>
+    !lineupSet.has(p.id) && !match.bench.includes(p.id) && !match.absent.includes(p.id)
+  );
+  const benchPlayers = match.bench.map(pid => players.find(p => p.id === pid)).filter(Boolean);
+  const absentPlayers = match.absent.map(pid => players.find(p => p.id === pid)).filter(Boolean);
+  const lineupCount = lineupPids(lineup).length;
+
+  // ====== Tap-to-place logic ======
+  function slotClick(idx) {
+    const currentPid = lineup[idx];
+    // Case 1: no selection AND slot empty → nothing
+    if (!selectedPid && !currentPid) return;
+    // Case 2: no selection AND slot has player → select that player (allows move/remove)
+    if (!selectedPid && currentPid) {
+      setSelectedPid(currentPid);
+      return;
+    }
+    // Case 3: selection AND slot empty → place selected player
+    if (selectedPid && !currentPid) {
+      // remove from wherever it is, place in slot
+      const newLineup = clearPidFromLineup(lineup, selectedPid);
+      newLineup[idx] = selectedPid;
+      const newBench = match.bench.filter(x => x !== selectedPid);
+      const newAbsent = match.absent.filter(x => x !== selectedPid);
+      setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+      setSelectedPid(null);
+      return;
+    }
+    // Case 4: selection AND slot has player
+    if (selectedPid && currentPid) {
+      if (selectedPid === currentPid) {
+        // tap self → deselect
+        setSelectedPid(null);
+        return;
+      }
+      // Swap: find selectedPid's current slot (or it might be from bench/available)
+      const selectedSlotIdx = lineup.findIndex(p => p === selectedPid);
+      const newLineup = [...lineup];
+      if (selectedSlotIdx >= 0) {
+        // Swap on field
+        newLineup[selectedSlotIdx] = currentPid;
+        newLineup[idx] = selectedPid;
+        setMatch({ ...match, lineup: newLineup });
+      } else {
+        // selected is from bench/available, currentPid (on field) gets bumped to bench
+        newLineup[idx] = selectedPid;
+        const newBench = match.bench.filter(x => x !== selectedPid);
+        if (!newBench.includes(currentPid)) newBench.push(currentPid);
+        const newAbsent = match.absent.filter(x => x !== selectedPid);
+        setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+      }
+      setSelectedPid(null);
+    }
+  }
+
+  function selectPlayer(pid) {
+    setSelectedPid(prev => prev === pid ? null : pid);
+  }
+
+  function sendToBench(pid) {
+    const newLineup = clearPidFromLineup(lineup, pid);
+    const newBench = match.bench.includes(pid) ? match.bench : [...match.bench, pid];
+    const newAbsent = match.absent.filter(x => x !== pid);
+    setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+    setSelectedPid(null);
+  }
+  function sendToAbsent(pid) {
+    const newLineup = clearPidFromLineup(lineup, pid);
+    const newBench = match.bench.filter(x => x !== pid);
+    const newAbsent = match.absent.includes(pid) ? match.absent : [...match.absent, pid];
+    setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+    setSelectedPid(null);
+  }
+  function sendToAvailable(pid) {
+    const newLineup = clearPidFromLineup(lineup, pid);
+    const newBench = match.bench.filter(x => x !== pid);
+    const newAbsent = match.absent.filter(x => x !== pid);
+    setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+    setSelectedPid(null);
+  }
+
+  function clearAll() {
+    setMatch({ ...match, lineup: Array(form.slots.length).fill(null) });
+    setSelectedPid(null);
+  }
+  function doAutoCompose() {
+    setMatch(autoCompose(match, players));
+    setSelectedPid(null);
   }
 
   return (
     <PageContainer>
+      {/* HEADER */}
       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16, flexWrap:'wrap' }}>
         <IconBtn icon="arrowLeft" onClick={onCancel}/>
-        <h1 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0, flex:1, minWidth:200 }}>
+        <h1 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0, flex:1, minWidth:200, letterSpacing:-0.3 }}>
           {match.opponent ? `vs ${match.opponent}` : 'Nouveau match'}
         </h1>
         <Btn variant="ghost" onClick={onCancel}>Annuler</Btn>
-        <Btn variant="primary" onClick={onSave}>Enregistrer</Btn>
-        {match.status === 'prepared' && match.lineup.length >= 1 && (
-          <Btn variant="success" icon="play" onClick={onLive}>Lancer le match</Btn>
+        <Btn variant="primary" icon="check" onClick={onSave}>Enregistrer</Btn>
+        {match.status === 'prepared' && lineupCount >= 1 && (
+          <Btn variant="success" icon="play" onClick={onLive}>Lancer</Btn>
         )}
       </div>
 
       <Tabs tabs={['Infos','Composition','Notes']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
 
       {tab === 0 && (
-        <Card padding={16}>
+        <Card padding={18}>
           <SectionTitle>Détails du match</SectionTitle>
           <div style={{ display:'grid', gap:14 }}>
             <Input label="Adversaire" value={match.opponent} onChange={v=>setMatch({...match, opponent:v})} placeholder="RSC Anderlecht U12"/>
@@ -3488,7 +3739,7 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
               <Input label="Date" type="date" value={match.date} onChange={v=>setMatch({...match, date:v})}/>
               <Input label="Heure" type="time" value={match.time} onChange={v=>setMatch({...match, time:v})}/>
               <Select label="Type" value={match.type} onChange={v=>setMatch({...match, type:v})}
-                options={MATCH_TYPES.map(t=>({value:t.id,label:t.label}))} placeholder=""/>
+                options={MATCH_TYPES.map(t=>({value:t.id,label:t.label,dot:true,color:t.color}))} placeholder=""/>
               <Select label="Durée" value={String(match.duration)} onChange={v=>setMatch({...match, duration:Number(v)})}
                 options={MATCH_DURATIONS.map(d=>({value:String(d.id),label:d.label}))} placeholder=""/>
             </div>
@@ -3496,81 +3747,28 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
               <Select label="Lieu" value={match.location} onChange={v=>setMatch({...match, location:v})}
                 options={[{value:'',label:'Non défini'}, ...LOCATIONS.map(l=>({ value:l, label:l, icon:'pin' }))]} placeholder=""/>
               <Select label="Domicile / Extérieur" value={match.domicile?'home':'away'} onChange={v=>setMatch({...match, domicile:v==='home'})}
-                options={[{value:'home',label:'Domicile'},{value:'away',label:'Extérieur'}]} placeholder=""/>
+                options={[{value:'home',label:'Domicile',icon:'home'},{value:'away',label:'Extérieur',icon:'pin'}]} placeholder=""/>
             </div>
             <Select label="Formation tactique" value={match.formation} onChange={v=>setMatch({...match, formation:v})}
-              options={FORMATIONS_8V8.map(f=>({value:f.id, label:f.label}))} placeholder=""/>
+              options={FORMATIONS_8V8.map(f=>({value:f.id, label:f.label, sub:f.desc}))} placeholder=""/>
           </div>
         </Card>
       )}
 
       {tab === 1 && (
-        <div>
-          <Card padding={16} style={{ marginBottom:14 }}>
-            <SectionTitle>Schéma tactique - {match.formation}</SectionTitle>
-            <FormationField formation={match.formation} lineup={match.lineup} players={players} T={T}/>
-            <div style={{ display:'flex', justifyContent:'center', gap:14, marginTop:12 }}>
-              <Badge bg={T.successLight} color={T.success}>Titulaires: {match.lineup.length}/8</Badge>
-              <Badge bg={T.warningLight} color={T.warning}>Banc: {match.bench.length}</Badge>
-              <Badge bg={T.dangerLight} color={T.danger}>Absents: {match.absent.length}</Badge>
-            </div>
-          </Card>
-
-          <Card padding={16}>
-            <SectionTitle>Joueurs disponibles</SectionTitle>
-            {players.length === 0 ? (
-              <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
-            ) : (
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))', gap:8 }}>
-                {players.map(p => {
-                  const inLineup = match.lineup.includes(p.id);
-                  const inBench = match.bench.includes(p.id);
-                  const inAbsent = match.absent.includes(p.id);
-                  const status = inLineup?'lineup':inBench?'bench':inAbsent?'absent':'none';
-                  const colors = { lineup:T.success, bench:T.warning, absent:T.danger, none:T.text3 };
-                  const labels = { lineup:'Titulaire', bench:'Banc', absent:'Absent', none:'Non sél.' };
-                  const pos = POSITIONS.find(x => x.id === p.position);
-                  return (
-                    <div key={p.id} style={{
-                      padding:'10px 12px', borderRadius:10,
-                      background:T.card2,
-                      border:`1.5px solid ${colors[status]}`,
-                      display:'flex', flexDirection:'column', gap:8,
-                    }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                        <Avatar name={`${p.firstName} ${p.lastName}`} size={32} color={pos?.color}/>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontSize:12, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            #{p.number} {p.firstName} {p.lastName?p.lastName[0]+'.':''}
-                          </div>
-                          <div style={{ fontSize:10, color:colors[status], fontWeight:600 }}>{labels[status]}</div>
-                        </div>
-                      </div>
-                      <div style={{ display:'flex', gap:4 }}>
-                        <button onClick={()=>togglePlayer(p.id, 'lineup')}
-                          style={{ flex:1, padding:'4px', fontSize:10, fontWeight:700,
-                            background: inLineup?T.success:T.card3, color: inLineup?'#fff':T.text2,
-                            border:'none', borderRadius:6, cursor:'pointer' }}>11</button>
-                        <button onClick={()=>togglePlayer(p.id, 'bench')}
-                          style={{ flex:1, padding:'4px', fontSize:10, fontWeight:700,
-                            background: inBench?T.warning:T.card3, color: inBench?'#fff':T.text2,
-                            border:'none', borderRadius:6, cursor:'pointer' }}>BC</button>
-                        <button onClick={()=>togglePlayer(p.id, 'absent')}
-                          style={{ flex:1, padding:'4px', fontSize:10, fontWeight:700,
-                            background: inAbsent?T.danger:T.card3, color: inAbsent?'#fff':T.text2,
-                            border:'none', borderRadius:6, cursor:'pointer' }}>ABS</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </div>
+        <CompositionView
+          match={match} lineup={lineup} form={form} players={players} T={T}
+          available={available} benchPlayers={benchPlayers} absentPlayers={absentPlayers}
+          lineupCount={lineupCount}
+          selectedPid={selectedPid} setSelectedPid={selectPlayer}
+          slotClick={slotClick}
+          sendToBench={sendToBench} sendToAbsent={sendToAbsent} sendToAvailable={sendToAvailable}
+          clearAll={clearAll} doAutoCompose={doAutoCompose}
+          onFormationChange={(f)=>setMatch({...match, formation:f})}/>
       )}
 
       {tab === 2 && (
-        <Card padding={16}>
+        <Card padding={18}>
           <SectionTitle>Notes & consignes</SectionTitle>
           <Textarea value={match.notes} onChange={v=>setMatch({...match, notes:v})}
             placeholder="Consignes tactiques, infos sur l'adversaire, dispositions particulières..." rows={8}/>
@@ -3583,7 +3781,7 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
 
       {match.status !== 'done' && (
         <div style={{ marginTop:16, textAlign:'center' }}>
-          <Btn variant="danger" onClick={()=>setConfirmDelete(match)}>Supprimer ce match</Btn>
+          <Btn variant="danger" icon="trash" onClick={()=>setConfirmDelete(match)}>Supprimer ce match</Btn>
         </div>
       )}
     </PageContainer>
@@ -3591,19 +3789,168 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
 }
 
 /* ============================================================
-   FORMATION FIELD (visual)
+   COMPOSITION VIEW (tap-to-place tablet-friendly)
 ============================================================ */
-function FormationField({ formation, lineup, players, T }) {
-  const form = FORMATIONS_8V8.find(f => f.id === formation) || FORMATIONS_8V8[0];
+function CompositionView({ match, lineup, form, players, T, available, benchPlayers, absentPlayers, lineupCount, selectedPid, setSelectedPid, slotClick, sendToBench, sendToAbsent, sendToAvailable, clearAll, doAutoCompose, onFormationChange }) {
+  const selectedPlayer = selectedPid ? players.find(p => p.id === selectedPid) : null;
+  const selectedLocation = selectedPid
+    ? (lineup.includes(selectedPid) ? 'lineup'
+      : match.bench.includes(selectedPid) ? 'bench'
+      : match.absent.includes(selectedPid) ? 'absent'
+      : 'available')
+    : null;
+
+  return (
+    <div>
+      {/* HEADER STATS + ACTIONS */}
+      <Card padding={14} style={{ marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <Badge bg={lineupCount===8?T.success:T.warningLight} color={lineupCount===8?'#fff':T.warning}>
+              {lineupCount}/8 titulaires
+            </Badge>
+            <Badge bg={T.card3} color={T.text2}>{match.bench.length} banc</Badge>
+            <Badge bg={T.card3} color={T.text2}>{match.absent.length} absent(s)</Badge>
+          </div>
+          <div style={{ display:'flex', gap:6 }}>
+            <Btn size="sm" variant="secondary" icon="refresh" onClick={doAutoCompose} title="Compose automatiquement selon les postes">Auto-compo</Btn>
+            <Btn size="sm" variant="ghost" icon="close" onClick={clearAll} title="Vider tous les titulaires">Vider</Btn>
+          </div>
+        </div>
+      </Card>
+
+      {/* SELECTED PLAYER BANNER */}
+      {selectedPlayer && (
+        <Card padding={12} style={{ marginBottom:14, borderColor:T.accent, background:T.accentLight }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <Avatar name={`${selectedPlayer.firstName} ${selectedPlayer.lastName}`} size={36} color={POSITIONS.find(x=>x.id===selectedPlayer.position)?.color}/>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                #{selectedPlayer.number||'?'} {selectedPlayer.firstName} {selectedPlayer.lastName}
+              </div>
+              <div style={{ fontSize:11, color:T.accent, fontWeight:600 }}>
+                Tape une case du terrain pour le placer
+              </div>
+            </div>
+            <Btn size="sm" variant="ghost" onClick={()=>setSelectedPid(selectedPid)}>Annuler</Btn>
+          </div>
+          {/* Quick action buttons */}
+          <div style={{ display:'flex', gap:6, marginTop:10 }}>
+            <Btn size="sm" variant={selectedLocation==='lineup'?'secondary':'ghost'} fullWidth disabled={selectedLocation==='available'} onClick={()=>sendToAvailable(selectedPid)} icon="users">Disponibles</Btn>
+            <Btn size="sm" variant={selectedLocation==='bench'?'warning':'ghost'} fullWidth disabled={selectedLocation==='bench'} onClick={()=>sendToBench(selectedPid)} icon="clipboard">Banc</Btn>
+            <Btn size="sm" variant={selectedLocation==='absent'?'danger':'ghost'} fullWidth disabled={selectedLocation==='absent'} onClick={()=>sendToAbsent(selectedPid)} icon="close">Absent</Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* FORMATION FIELD (interactive) */}
+      <Card padding={14} style={{ marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:10, flexWrap:'wrap' }}>
+          <SectionTitle style={{ marginBottom:0 }}>Terrain — {form.label}</SectionTitle>
+        </div>
+        <InteractiveField
+          form={form} lineup={lineup} players={players} T={T}
+          selectedPid={selectedPid} onSlotClick={slotClick}/>
+        <div style={{ marginTop:10, padding:'8px 12px', background:T.card2, borderRadius:8, fontSize:11.5, color:T.text2, textAlign:'center', lineHeight:1.4 }}>
+          {selectedPid
+            ? <><strong style={{ color:T.accent }}>Tape une case</strong> pour placer le joueur sélectionné</>
+            : <>Tape un joueur (terrain ou disponibles) pour le sélectionner, puis tape une case pour le déplacer</>}
+        </div>
+      </Card>
+
+      {/* PLAYER LISTS */}
+      {players.length === 0 ? (
+        <Card>
+          <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
+        </Card>
+      ) : (
+        <Card padding={14}>
+          <PlayerListSection title="Disponibles" subtitle="Pas encore affectés" icon="users"
+            players={available} T={T} colorKey="info"
+            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+            emptyText="Tous les joueurs sont affectés"/>
+
+          <div style={{ height:1, background:T.border, margin:'14px 0' }}/>
+
+          <PlayerListSection title="Banc" subtitle="Remplaçants pendant le match" icon="clipboard"
+            players={benchPlayers} T={T} colorKey="warning"
+            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+            emptyText="Aucun remplaçant"/>
+
+          <div style={{ height:1, background:T.border, margin:'14px 0' }}/>
+
+          <PlayerListSection title="Absents" subtitle="Non disponibles pour ce match" icon="close"
+            players={absentPlayers} T={T} colorKey="danger"
+            selectedPid={selectedPid} onPlayerClick={setSelectedPid}
+            emptyText="Tous les joueurs sont disponibles"/>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function PlayerListSection({ title, subtitle, icon, players, T, colorKey, selectedPid, onPlayerClick, emptyText }) {
+  const color = T[colorKey];
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+        <div style={{
+          width:28, height:28, borderRadius:8,
+          background: color+'1F', color,
+          display:'flex', alignItems:'center', justifyContent:'center',
+        }}><Icon name={icon} size={15}/></div>
+        <div>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{title} <span style={{ color:T.text2, fontWeight:600 }}>({players.length})</span></div>
+          <div style={{ fontSize:10.5, color:T.text2 }}>{subtitle}</div>
+        </div>
+      </div>
+      {players.length === 0 ? (
+        <div style={{ padding:'12px 14px', background:T.card2, borderRadius:8, fontSize:12, color:T.text3, textAlign:'center', fontStyle:'italic' }}>
+          {emptyText}
+        </div>
+      ) : (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+          {players.map(p => {
+            const isSelected = selectedPid === p.id;
+            const pos = POSITIONS.find(x => x.id === p.position);
+            return (
+              <button key={p.id} onClick={()=>onPlayerClick(p.id)}
+                style={{
+                  display:'flex', alignItems:'center', gap:7,
+                  padding:'5px 12px 5px 5px',
+                  background: isSelected ? T.accent : T.card2,
+                  color: isSelected ? '#fff' : T.text,
+                  border:`1.5px solid ${isSelected ? T.accent : T.border}`,
+                  borderRadius:999, cursor:'pointer',
+                  transition:'all 0.12s',
+                  fontWeight:600,
+                }}>
+                <Avatar name={`${p.firstName} ${p.lastName}`} size={26} color={pos?.color}/>
+                <span style={{ fontSize:12 }}>
+                  #{p.number||'?'} {p.lastName || p.firstName}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   INTERACTIVE FIELD (tap-to-place)
+============================================================ */
+function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick }) {
   return (
     <div style={{
       position:'relative', width:'100%',
-      paddingBottom:'140%', maxWidth:380, margin:'0 auto',
+      paddingBottom:'135%', maxWidth:440, margin:'0 auto',
       background:'linear-gradient(180deg, #0a5d2e 0%, #0e7a3f 100%)',
       borderRadius:14, overflow:'hidden',
       boxShadow: T.shadowMd,
+      userSelect:'none', WebkitTapHighlightColor:'transparent',
     }}>
-      {/* Field markings */}
       <div style={{ position:'absolute', inset:0 }}>
         <svg viewBox="0 0 100 140" width="100%" height="100%" preserveAspectRatio="none">
           <rect x="2" y="2" width="96" height="136" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
@@ -3616,43 +3963,50 @@ function FormationField({ formation, lineup, players, T }) {
           <rect x="40" y="133" width="20" height="5" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
         </svg>
       </div>
-      {/* Players */}
       {form.slots.map((slot, i) => {
         const pid = lineup[i];
         const player = pid ? players.find(p => p.id === pid) : null;
         const pos = POSITIONS.find(x => x.id === slot.pos);
+        const isSelected = pid && pid === selectedPid;
+        const isEmpty = !player;
+        const showPulse = selectedPid && isEmpty;
         return (
-          <div key={i} style={{
-            position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`,
-            transform:'translate(-50%,-50%)', textAlign:'center',
-          }}>
-            <div style={{
-              width:42, height:42, borderRadius:'50%',
-              background: player ? '#fff' : 'rgba(255,255,255,0.25)',
-              border:`2px solid ${pos?.color || '#fff'}`,
-              display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize:13, fontWeight:800, color: player ? '#1C1C1E' : 'rgba(255,255,255,0.6)',
-              margin:'0 auto', boxShadow:'0 2px 8px rgba(0,0,0,0.3)',
+          <button key={i} onClick={()=>onSlotClick(i)}
+            className={showPulse ? 'pulse' : ''}
+            style={{
+              position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`,
+              transform:'translate(-50%,-50%)',
+              background:'transparent', border:'none', padding:0, cursor:'pointer',
+              textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:2,
             }}>
-              {player ? (player.number || (player.firstName?.[0]||'?')) : slot.pos}
+            <div style={{
+              width:48, height:48, borderRadius:'50%',
+              background: player ? (isSelected ? T.accent : '#fff') : 'rgba(255,255,255,0.18)',
+              border:`2.5px solid ${isSelected ? T.accent : (pos?.color || '#fff')}`,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:14, fontWeight:800,
+              color: player ? (isSelected ? '#fff' : '#1C1C1E') : 'rgba(255,255,255,0.7)',
+              boxShadow: isSelected ? `0 0 0 4px ${T.accent}40, 0 2px 8px rgba(0,0,0,0.4)` : '0 2px 8px rgba(0,0,0,0.3)',
+              transition:'all 0.2s',
+            }}>
+              {player ? (player.number || (player.firstName?.[0]||'?')) : (
+                <Icon name="plus" size={18} color="rgba(255,255,255,0.5)"/>
+              )}
             </div>
-            {player && (
-              <div style={{
-                fontSize:9, fontWeight:700, color:'#fff', marginTop:3,
-                textShadow:'0 1px 2px rgba(0,0,0,0.8)',
-                whiteSpace:'nowrap', maxWidth:60, overflow:'hidden', textOverflow:'ellipsis',
-              }}>{player.lastName || player.firstName}</div>
-            )}
-          </div>
+            <div style={{
+              fontSize: player ? 10 : 9, fontWeight:700, color:'#fff', marginTop:1,
+              textShadow:'0 1px 2px rgba(0,0,0,0.8)',
+              whiteSpace:'nowrap', maxWidth:70, overflow:'hidden', textOverflow:'ellipsis',
+              padding:'1px 5px', borderRadius:4,
+              background: player ? 'transparent' : 'rgba(0,0,0,0.35)',
+            }}>{player ? (player.lastName || player.firstName) : pos?.short || slot.pos}</div>
+          </button>
         );
       })}
     </div>
   );
 }
 
-/* ============================================================
-   MATCH LIVE
-============================================================ */
 function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -3660,6 +4014,7 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
   const intervalRef = useRef(null);
   const [eventModal, setEventModal] = useState(false);
   const [eventDraft, setEventDraft] = useState({ type:'goal', playerId:'', minute:0, note:'' });
+  const [showLineup, setShowLineup] = useState(false);
 
   useEffect(() => {
     if (running) {
@@ -3670,18 +4025,21 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [running]);
 
-  const halfDuration = (match.duration / 2) * 60; // seconds
+  const halfDuration = (match.duration / 2) * 60;
   const minute = Math.floor(elapsed / 60) + (half === 2 ? Math.floor(halfDuration/60) : 0);
-  const totalProgress = Math.min((elapsed / halfDuration) * 100, 100);
+  const totalDurationS = match.duration * 60;
+  const elapsedTotal = (half === 2 ? halfDuration : 0) + elapsed;
+  const totalProgress = Math.min((elapsedTotal / totalDurationS) * 100, 100);
 
-  function addEvent() {
-    setEventDraft({ type:'goal', playerId:'', minute, note:'' });
+  function addEvent(type) {
+    setEventDraft({ type: type || 'goal', playerId:'', minute, note:'' });
     setEventModal(true);
   }
   function saveEvent() {
     const ev = { ...eventDraft, id:uid(), createdAt: nowMs() };
     let newScore = { ...match.score };
     if (ev.type === 'goal') newScore.us++;
+    else if (ev.type === 'goal_against') newScore.them++;
     setMatch({ ...match, events:[...match.events, ev], score:newScore });
     setEventModal(false);
   }
@@ -3689,10 +4047,14 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
     const ev = match.events.find(e=>e.id===eid);
     let newScore = { ...match.score };
     if (ev && ev.type === 'goal') newScore.us = Math.max(0, newScore.us-1);
+    else if (ev && ev.type === 'goal_against') newScore.them = Math.max(0, newScore.them-1);
     setMatch({ ...match, events: match.events.filter(e=>e.id!==eid), score:newScore });
   }
   function adjustOpponentScore(delta) {
     setMatch({ ...match, score: { ...match.score, them: Math.max(0, match.score.them + delta) } });
+  }
+  function adjustOwnScore(delta) {
+    setMatch({ ...match, score: { ...match.score, us: Math.max(0, match.score.us + delta) } });
   }
   function nextHalf() {
     if (half === 1) {
@@ -3700,61 +4062,142 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
     }
   }
 
-  const lineupPlayers = match.lineup.map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+  const lineup = useMemo(() => ensureLineupArray(match), [match.lineup, match.formation]);
+  const lineupPlayers = lineupPids(lineup).map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+  const benchPlayers = (match.bench||[]).map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+  const allEligible = [...lineupPlayers, ...benchPlayers];
 
   return (
-    <div style={{ minHeight:'calc(100vh - 60px)' }}>
+    <div style={{ minHeight:'100%', background: T.bg }}>
       <PageContainer>
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:16 }}>
+        {/* HEADER */}
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
           <IconBtn icon="arrowLeft" onClick={onCancel}/>
-          <div style={{ flex:1 }}>
-            <h1 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0, lineHeight:1.1 }}>Match en cours</h1>
-            <div style={{ fontSize:12, color:T.text2, marginTop:2 }}>vs {match.opponent}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <h1 style={{ fontSize:20, fontWeight:800, color:T.text, margin:0, lineHeight:1.1, letterSpacing:-0.2 }}>Match en cours</h1>
+            <div style={{ fontSize:11, color:T.text2, marginTop:2 }}>vs {match.opponent}</div>
           </div>
-          <Badge bg={T.dangerLight} color={T.danger}><span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span> LIVE</Badge>
+          <Badge bg={T.dangerLight} color={T.danger}>
+            <span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span>
+            LIVE
+          </Badge>
         </div>
 
         {/* SCOREBOARD */}
-        <Card padding={20} style={{ marginBottom:14, textAlign:'center', background:`linear-gradient(135deg, ${T.accentLight} 0%, ${T.card} 100%)` }}>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:14 }}>
-            <div>
-              <div style={{ fontSize:13, color:T.text2, fontWeight:600, marginBottom:6 }}>RLFC</div>
-              <div style={{ fontSize:56, fontWeight:800, color:T.accent, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{match.score.us}</div>
-            </div>
-            <div style={{ fontSize:24, fontWeight:700, color:T.text3 }}>–</div>
-            <div>
-              <div style={{ fontSize:13, color:T.text2, fontWeight:600, marginBottom:6, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{match.opponent || 'Adv.'}</div>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-                <IconBtn icon="minus" size={32} onClick={()=>adjustOpponentScore(-1)}/>
-                <div style={{ fontSize:56, fontWeight:800, color:T.text, lineHeight:1, fontVariantNumeric:'tabular-nums', minWidth:60 }}>{match.score.them}</div>
-                <IconBtn icon="plus" size={32} onClick={()=>adjustOpponentScore(1)}/>
+        <Card padding={0} style={{ marginBottom:14, overflow:'hidden' }}>
+          <div style={{
+            padding:18,
+            background:`linear-gradient(135deg, ${T.accent}18 0%, ${T.card} 60%)`,
+          }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:14 }}>
+              {/* US */}
+              <div style={{ textAlign:'center' }}>
+                <div style={{ fontSize:13, color:T.text2, fontWeight:700, marginBottom:6, letterSpacing:0.5, textTransform:'uppercase' }}>RLFC</div>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                  <IconBtn icon="minus" size={36} onClick={()=>adjustOwnScore(-1)} variant="ghost"/>
+                  <div style={{ fontSize:60, fontWeight:800, color:T.accent, lineHeight:1, fontVariantNumeric:'tabular-nums', minWidth:60, letterSpacing:-2 }}>{match.score.us}</div>
+                  <IconBtn icon="plus" size={36} onClick={()=>adjustOwnScore(1)} variant="ghost"/>
+                </div>
+              </div>
+              <div style={{ fontSize:30, fontWeight:700, color:T.text3 }}>–</div>
+              {/* THEM */}
+              <div style={{ textAlign:'center' }}>
+                <div style={{
+                  fontSize:13, color:T.text2, fontWeight:700, marginBottom:6, letterSpacing:0.5, textTransform:'uppercase',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>{match.opponent || 'Adv.'}</div>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                  <IconBtn icon="minus" size={36} onClick={()=>adjustOpponentScore(-1)} variant="ghost"/>
+                  <div style={{ fontSize:60, fontWeight:800, color:T.text, lineHeight:1, fontVariantNumeric:'tabular-nums', minWidth:60, letterSpacing:-2 }}>{match.score.them}</div>
+                  <IconBtn icon="plus" size={36} onClick={()=>adjustOpponentScore(1)} variant="ghost"/>
+                </div>
               </div>
             </div>
-          </div>
 
-          <Divider/>
-
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:14 }}>
-            <div style={{ fontSize:32, fontWeight:800, color:T.text, fontVariantNumeric:'tabular-nums' }}>{mmss(elapsed)}</div>
-            <Badge bg={T.card3} color={T.text}>{half}ère mi-temps · {minute}'</Badge>
+            {/* CHRONO */}
+            <div style={{ marginTop:18, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:14, marginBottom:8, flexWrap:'wrap' }}>
+                <div style={{ fontSize:36, fontWeight:800, color:T.text, fontVariantNumeric:'tabular-nums', letterSpacing:-1 }}>{mmss(elapsed)}</div>
+                <Badge bg={half===1?T.infoLight:T.warningLight} color={half===1?T.info:T.warning}>
+                  {half}<sup style={{ fontSize:8 }}>{half===1?'ère':'e'}</sup> mi-temps
+                </Badge>
+                <Badge bg={T.card3} color={T.text}>{minute}'</Badge>
+              </div>
+              <ProgressBar value={elapsedTotal} max={totalDurationS} color={T.accent} height={6} showValue={false}/>
+            </div>
           </div>
-          <ProgressBar value={elapsed} max={halfDuration} color={T.accent} height={6} showValue={false} style={{ marginTop:8 }}/>
         </Card>
 
-        {/* CONTROLS */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, marginBottom:14 }}>
-          <Btn size="lg" variant={running?'danger':'success'} icon={running?'pause':'play'} onClick={()=>setRunning(!running)}>
+        {/* MAIN CHRONO CONTROLS */}
+        <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:8, marginBottom:14 }}>
+          <Btn size="xl" fullWidth variant={running?'danger':'success'} icon={running?'pause':'play'} onClick={()=>setRunning(!running)}>
             {running?'Pause':'Démarrer'}
           </Btn>
-          <Btn size="lg" variant="warning" onClick={nextHalf} disabled={half===2}>Mi-temps</Btn>
-          <Btn size="lg" variant="primary" icon="plus" onClick={addEvent}>Événement</Btn>
+          <Btn size="xl" fullWidth variant="warning" icon="arrowRight" onClick={nextHalf} disabled={half===2}>Mi-temps</Btn>
         </div>
+
+        {/* QUICK EVENT BUTTONS */}
+        <Card padding={12} style={{ marginBottom:14 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8 }}>Ajout rapide</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6 }}>
+            <QuickEventBtn type="goal" T={T} onClick={()=>addEvent('goal')}/>
+            <QuickEventBtn type="goal_against" T={T} onClick={()=>addEvent('goal_against')}/>
+            <QuickEventBtn type="yellow" T={T} onClick={()=>addEvent('yellow')}/>
+            <QuickEventBtn type="sub" T={T} onClick={()=>addEvent('sub')}/>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginTop:6 }}>
+            <QuickEventBtn type="assist" T={T} onClick={()=>addEvent('assist')}/>
+            <QuickEventBtn type="red" T={T} onClick={()=>addEvent('red')}/>
+            <QuickEventBtn type="save" T={T} onClick={()=>addEvent('save')}/>
+            <QuickEventBtn type="incident" T={T} onClick={()=>addEvent('incident')}/>
+          </div>
+        </Card>
+
+        {/* COMPACT LINEUP TOGGLE */}
+        <Card padding={12} style={{ marginBottom:14 }}>
+          <button onClick={()=>setShowLineup(s=>!s)}
+            style={{
+              width:'100%', display:'flex', alignItems:'center', gap:10,
+              padding:'4px 6px', background:'transparent',
+              cursor:'pointer', textAlign:'left',
+            }}>
+            <div style={{
+              width:30, height:30, borderRadius:8,
+              background:T.success+'1F', color:T.success,
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}><Icon name="users" size={16}/></div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>Composition ({lineupPlayers.length}/8 + {benchPlayers.length} banc)</div>
+              <div style={{ fontSize:11, color:T.text2 }}>{match.formation}</div>
+            </div>
+            <Icon name={showLineup?'chevronUp':'chevronDown'} size={16} color={T.text2}/>
+          </button>
+          {showLineup && (
+            <div className="slide-down" style={{ marginTop:12 }}>
+              <InteractiveField form={getFormation(match.formation)} lineup={lineup} players={players} T={T} selectedPid={null} onSlotClick={()=>{}}/>
+              {benchPlayers.length > 0 && (
+                <div style={{ marginTop:12 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', marginBottom:6 }}>Banc</div>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+                    {benchPlayers.map(p => (
+                      <span key={p.id} style={{
+                        padding:'4px 11px', borderRadius:999,
+                        background:T.warningLight, color:T.warning,
+                        fontSize:12, fontWeight:600,
+                      }}>#{p.number||'?'} {p.lastName||p.firstName}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
 
         {/* EVENTS TIMELINE */}
         <Card padding={14} style={{ marginBottom:14 }}>
           <SectionTitle>Événements ({match.events.length})</SectionTitle>
           {match.events.length === 0 ? (
-            <EmptyState icon="noteEdit" title="Aucun événement" message="Ajoute buts, cartons, changements..."/>
+            <EmptyState icon="noteEdit" title="Aucun événement" message="Utilise les boutons ci-dessus pour ajouter buts, cartons, changements..."/>
           ) : (
             <div style={{ display:'grid', gap:6 }}>
               {[...match.events].sort((a,b)=>(b.minute||0)-(a.minute||0)).map(ev => {
@@ -3764,20 +4207,27 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
                   <div key={ev.id} style={{
                     display:'flex', alignItems:'center', gap:10,
                     padding:'8px 12px', background:T.card2, borderRadius:10,
+                    border:`1px solid ${T.border}`,
                   }}>
                     <div style={{
-                      width:32, height:32, borderRadius:9,
+                      width:34, height:34, borderRadius:9,
                       background:et.color+'1F', color:et.color,
                       display:'flex', alignItems:'center', justifyContent:'center',
                       flexShrink:0,
                     }}><Icon name={et.icon} size={16}/></div>
-                    <div style={{ flex:1 }}>
+                    <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
-                        {et.label} {player && `· ${player.firstName} ${player.lastName?player.lastName[0]+'.':''}`}
+                        {et.label}{player ? <> · {player.firstName} {player.lastName?player.lastName[0]+'.':''}</> : ''}
                       </div>
-                      <div style={{ fontSize:11, color:T.text2 }}>{ev.minute}' {ev.note?`· ${ev.note}`:''}</div>
+                      <div style={{ fontSize:11, color:T.text2 }}>{ev.minute}'{ev.note?` · ${ev.note}`:''}</div>
                     </div>
-                    <IconBtn icon="close" size={28} onClick={()=>removeEvent(ev.id)} color={T.danger}/>
+                    <div style={{
+                      minWidth:38, padding:'3px 8px',
+                      background:T.card3, color:T.text,
+                      borderRadius:7, fontSize:13, fontWeight:800, textAlign:'center',
+                      fontVariantNumeric:'tabular-nums',
+                    }}>{ev.minute}'</div>
+                    <IconBtn icon="trash" size={32} onClick={()=>removeEvent(ev.id)} variant="danger"/>
                   </div>
                 );
               })}
@@ -3785,17 +4235,17 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
           )}
         </Card>
 
-        <Btn fullWidth size="lg" variant="primary" icon="check" onClick={onEnd}>Terminer le match</Btn>
+        <Btn fullWidth size="xl" variant="primary" icon="check" onClick={onEnd}>Terminer le match</Btn>
 
         {/* EVENT MODAL */}
-        <Modal open={eventModal} onClose={()=>setEventModal(false)} title="Ajouter un événement" width={460}
+        <Modal open={eventModal} onClose={()=>setEventModal(false)} title="Ajouter un événement" width={480}
           footer={<>
             <Btn variant="ghost" onClick={()=>setEventModal(false)}>Annuler</Btn>
-            <Btn variant="primary" onClick={saveEvent}>Ajouter</Btn>
+            <Btn variant="primary" icon="check" onClick={saveEvent}>Ajouter</Btn>
           </>}>
           <div style={{ display:'grid', gap:14 }}>
             <div>
-              <label style={{ display:'block', fontSize:12, fontWeight:600, color:T.text2, marginBottom:6, textTransform:'uppercase' }}>Type</label>
+              <label style={{ display:'block', fontSize:11, fontWeight:700, color:T.text2, marginBottom:6, textTransform:'uppercase', letterSpacing:0.7 }}>Type</label>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:6 }}>
                 {EVENT_TYPES.map(et => (
                   <button key={et.id} onClick={()=>setEventDraft({...eventDraft, type:et.id})}
@@ -3812,15 +4262,339 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
                 ))}
               </div>
             </div>
-            <Select label="Joueur" value={eventDraft.playerId} onChange={v=>setEventDraft({...eventDraft, playerId:v})}
-              options={[{value:'',label:'Aucun joueur'}, ...lineupPlayers.concat(match.bench.map(pid=>players.find(p=>p.id===pid)).filter(Boolean)).map(p=>({value:p.id, label:`#${p.number} ${p.firstName} ${p.lastName}`}))]}
-              placeholder=""/>
-            <Input label="Minute" type="number" value={eventDraft.minute} onChange={v=>setEventDraft({...eventDraft, minute:v})}/>
-            <Input label="Note" value={eventDraft.note} onChange={v=>setEventDraft({...eventDraft, note:v})} placeholder="Ex: superbe action collective"/>
+            {/* Player selector only for events that involve a player */}
+            {eventDraft.type !== 'goal_against' && (
+              <Select label="Joueur" value={eventDraft.playerId} onChange={v=>setEventDraft({...eventDraft, playerId:v})}
+                options={[{value:'',label:'Aucun joueur'}, ...allEligible.map(p=>({value:p.id, label:`#${p.number||'?'} ${p.firstName} ${p.lastName}`}))]}
+                placeholder=""/>
+            )}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:10 }}>
+              <Input label="Minute" type="number" value={eventDraft.minute} onChange={v=>setEventDraft({...eventDraft, minute:v})}/>
+              <Input label="Note" value={eventDraft.note} onChange={v=>setEventDraft({...eventDraft, note:v})} placeholder="Ex: superbe action..."/>
+            </div>
           </div>
         </Modal>
       </PageContainer>
     </div>
+  );
+}
+
+function QuickEventBtn({ type, T, onClick }) {
+  const et = EVENT_TYPES.find(t => t.id === type);
+  const [press, setPress] = useState(false);
+  return (
+    <button onClick={onClick}
+      onTouchStart={()=>setPress(true)} onTouchEnd={()=>setPress(false)}
+      onMouseDown={()=>setPress(true)} onMouseUp={()=>setPress(false)} onMouseLeave={()=>setPress(false)}
+      style={{
+        padding:'10px 4px', borderRadius:10,
+        background: et.color+'15',
+        color: et.color,
+        border:`1.5px solid ${et.color}40`,
+        cursor:'pointer',
+        display:'flex', flexDirection:'column', alignItems:'center', gap:4,
+        transition:'transform 0.08s',
+        transform: press ? 'scale(0.95)' : 'scale(1)',
+        minHeight:60,
+      }}>
+      <Icon name={et.icon} size={20}/>
+      <span style={{ fontSize:10, fontWeight:700, textAlign:'center', lineHeight:1.1 }}>{et.label}</span>
+    </button>
+  );
+}
+
+/* ============================================================
+   MATCH RECAP (page récap d'un match terminé)
+============================================================ */
+function MatchRecap({ match, players, T, onBack, onEdit, onDelete, confirmDelete, setConfirmDelete, deleteMatch }) {
+  const mt = MATCH_TYPES.find(t=>t.id===match.type);
+  const result = match.score.us > match.score.them ? 'V' : (match.score.us < match.score.them ? 'D' : 'N');
+  const resultColor = result==='V' ? T.success : result==='D' ? T.danger : T.warning;
+  const resultLabel = result==='V' ? 'VICTOIRE' : result==='D' ? 'DÉFAITE' : 'MATCH NUL';
+  const form = getFormation(match.formation);
+  const lineup = ensureLineupArray(match);
+  const lineupPlayers = lineupPids(lineup).map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+  const benchPlayers = (match.bench||[]).map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+  const absentPlayers = (match.absent||[]).map(pid => players.find(p=>p.id===pid)).filter(Boolean);
+
+  // Player match stats
+  const playerStats = useMemo(() => {
+    const stats = {};
+    (match.events||[]).forEach(ev => {
+      if (!ev.playerId) return;
+      if (!stats[ev.playerId]) stats[ev.playerId] = { goals:0, assists:0, yellow:0, red:0, save:0 };
+      if (ev.type === 'goal') stats[ev.playerId].goals++;
+      else if (ev.type === 'assist') stats[ev.playerId].assists++;
+      else if (ev.type === 'yellow') stats[ev.playerId].yellow++;
+      else if (ev.type === 'red') stats[ev.playerId].red++;
+      else if (ev.type === 'save') stats[ev.playerId].save++;
+    });
+    return stats;
+  }, [match.events]);
+
+  const scorers = useMemo(() =>
+    Object.entries(playerStats)
+      .filter(([, s]) => s.goals > 0)
+      .map(([pid, s]) => ({ player: players.find(p => p.id === pid), goals: s.goals, assists: s.assists }))
+      .filter(x => x.player)
+      .sort((a,b) => b.goals - a.goals)
+  , [playerStats, players]);
+
+  return (
+    <PageContainer>
+      {/* HEADER */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:18, flexWrap:'wrap' }}>
+        <IconBtn icon="arrowLeft" onClick={onBack}/>
+        <div style={{ flex:1, minWidth:200 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap', marginBottom:4 }}>
+            <Badge bg={mt.color+'1F'} color={mt.color}>{mt.label}</Badge>
+            <Badge bg={T.card3} color={T.text2}><Icon name="pin" size={10}/> {match.domicile?'Domicile':'Extérieur'}</Badge>
+          </div>
+          <h1 style={{ fontSize:20, fontWeight:800, color:T.text, margin:0, letterSpacing:-0.3, lineHeight:1.2 }}>
+            RLFC vs {match.opponent || 'Adversaire'}
+          </h1>
+        </div>
+        <Btn variant="secondary" icon="edit" onClick={onEdit}>Modifier</Btn>
+      </div>
+
+      {/* RESULT HERO */}
+      <Card padding={0} style={{ marginBottom:14, overflow:'hidden' }}>
+        <div style={{ height:5, background:resultColor }}/>
+        <div style={{
+          padding:'22px 18px',
+          background:`linear-gradient(135deg, ${resultColor}15 0%, ${T.card} 70%)`,
+        }}>
+          <div style={{ textAlign:'center', marginBottom:14 }}>
+            <Badge bg={resultColor} color="#fff" style={{ fontSize:13, padding:'5px 14px' }}>{resultLabel}</Badge>
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr auto 1fr', alignItems:'center', gap:18 }}>
+            <div style={{ textAlign:'center' }}>
+              <div style={{ fontSize:13, color:T.text2, fontWeight:700, letterSpacing:0.5, textTransform:'uppercase', marginBottom:6 }}>RLFC</div>
+              <div style={{
+                fontSize:68, fontWeight:800, lineHeight:1, fontVariantNumeric:'tabular-nums', letterSpacing:-2,
+                color: result==='V' ? resultColor : (result==='N' ? T.text : T.text2),
+              }}>{match.score.us}</div>
+            </div>
+            <div style={{ fontSize:32, fontWeight:700, color:T.text3 }}>–</div>
+            <div style={{ textAlign:'center' }}>
+              <div style={{
+                fontSize:13, color:T.text2, fontWeight:700, letterSpacing:0.5, textTransform:'uppercase', marginBottom:6,
+                whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+              }}>{match.opponent || 'Adv.'}</div>
+              <div style={{
+                fontSize:68, fontWeight:800, lineHeight:1, fontVariantNumeric:'tabular-nums', letterSpacing:-2,
+                color: result==='D' ? resultColor : (result==='N' ? T.text : T.text2),
+              }}>{match.score.them}</div>
+            </div>
+          </div>
+
+          {/* Scorers under score */}
+          {scorers.length > 0 && (
+            <div style={{ marginTop:14, paddingTop:14, borderTop:`1px solid ${T.border}` }}>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6, justifyContent:'center' }}>
+                {scorers.map(({ player, goals }) => (
+                  <span key={player.id} style={{
+                    display:'inline-flex', alignItems:'center', gap:5,
+                    padding:'4px 10px', borderRadius:999,
+                    background:T.success+'18', color:T.success,
+                    fontSize:12, fontWeight:700,
+                    border:`1px solid ${T.success}40`,
+                  }}>
+                    <Icon name="ball" size={11}/>
+                    {player.firstName} {player.lastName||''}
+                    {goals > 1 && <span style={{ fontSize:11 }}>×{goals}</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* INFO STRIP */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))', gap:10, marginBottom:14 }}>
+        <Card padding={12}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:34, height:34, borderRadius:9, background:T.info+'1F', color:T.info, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="calendar" size={16}/></div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Date</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{dateFmtShort(match.date)} {match.time}</div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={12}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:34, height:34, borderRadius:9, background:T.warning+'1F', color:T.warning, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="pin" size={16}/></div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Lieu</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{match.location || '—'}</div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={12}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:34, height:34, borderRadius:9, background:T.purple+'1F', color:T.purple, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="brain" size={16}/></div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Formation</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{match.formation}</div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={12}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:34, height:34, borderRadius:9, background:T.accent+'1F', color:T.accent, display:'flex', alignItems:'center', justifyContent:'center' }}><Icon name="clock" size={16}/></div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Durée</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{match.duration} min</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* COMPOSITION VISUAL */}
+      <Card padding={18} style={{ marginBottom:14 }}>
+        <SectionTitle>Composition</SectionTitle>
+        <InteractiveField form={form} lineup={lineup} players={players} T={T} selectedPid={null} onSlotClick={()=>{}}/>
+        {benchPlayers.length > 0 && (
+          <div style={{ marginTop:14 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.warning, textTransform:'uppercase', letterSpacing:0.7, marginBottom:6, display:'flex', alignItems:'center', gap:5 }}>
+              <Icon name="clipboard" size={11}/> Banc ({benchPlayers.length})
+            </div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+              {benchPlayers.map(p => (
+                <span key={p.id} style={{
+                  padding:'4px 11px', borderRadius:999,
+                  background:T.warningLight, color:T.warning,
+                  fontSize:12, fontWeight:600,
+                  border:`1px solid ${T.warning}40`,
+                }}>#{p.number||'?'} {p.lastName||p.firstName}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {absentPlayers.length > 0 && (
+          <div style={{ marginTop:14 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.danger, textTransform:'uppercase', letterSpacing:0.7, marginBottom:6, display:'flex', alignItems:'center', gap:5 }}>
+              <Icon name="close" size={11}/> Absents ({absentPlayers.length})
+            </div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+              {absentPlayers.map(p => (
+                <span key={p.id} style={{
+                  padding:'4px 11px', borderRadius:999,
+                  background:T.dangerLight, color:T.danger,
+                  fontSize:12, fontWeight:600,
+                  border:`1px solid ${T.danger}40`,
+                }}>#{p.number||'?'} {p.lastName||p.firstName}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* TIMELINE EVENTS */}
+      {(match.events||[]).length > 0 && (
+        <Card padding={18} style={{ marginBottom:14 }}>
+          <SectionTitle>Timeline ({(match.events||[]).length} événements)</SectionTitle>
+          <div style={{ display:'grid', gap:6 }}>
+            {[...match.events].sort((a,b)=>(a.minute||0)-(b.minute||0)).map(ev => {
+              const et = EVENT_TYPES.find(t=>t.id===ev.type);
+              const player = players.find(p=>p.id===ev.playerId);
+              const isUs = et.sideUs !== false;
+              return (
+                <div key={ev.id} style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  padding:'10px 12px', background:T.card2, borderRadius:10,
+                  border:`1px solid ${T.border}`,
+                  borderLeft:`3px solid ${et.color}`,
+                }}>
+                  <div style={{
+                    minWidth:42, padding:'4px 8px',
+                    background:T.card3, color:T.text,
+                    borderRadius:7, fontSize:13, fontWeight:800, textAlign:'center',
+                    fontVariantNumeric:'tabular-nums',
+                  }}>{ev.minute}'</div>
+                  <div style={{
+                    width:32, height:32, borderRadius:9,
+                    background:et.color+'1F', color:et.color,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    flexShrink:0,
+                  }}><Icon name={et.icon} size={15}/></div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                      {et.label}{player ? <> · {player.firstName} {player.lastName?player.lastName[0]+'.':''}</> : ''}
+                    </div>
+                    {ev.note && <div style={{ fontSize:11, color:T.text2, marginTop:2, fontStyle:'italic' }}>{ev.note}</div>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* PLAYER STATS */}
+      {Object.keys(playerStats).length > 0 && (
+        <Card padding={18} style={{ marginBottom:14 }}>
+          <SectionTitle>Performances joueurs</SectionTitle>
+          <div style={{ display:'grid', gap:6 }}>
+            {Object.entries(playerStats)
+              .map(([pid, s]) => ({ player: players.find(p => p.id === pid), ...s }))
+              .filter(x => x.player)
+              .sort((a,b) => (b.goals*3+b.assists*2+b.save) - (a.goals*3+a.assists*2+a.save))
+              .map(({ player, goals, assists, yellow, red, save }) => {
+                const pos = POSITIONS.find(x => x.id === player.position);
+                return (
+                  <div key={player.id} style={{
+                    display:'flex', alignItems:'center', gap:10,
+                    padding:'10px 12px', background:T.card2, borderRadius:10,
+                    border:`1px solid ${T.border}`,
+                  }}>
+                    <Avatar name={`${player.firstName} ${player.lastName}`} size={34} color={pos?.color}/>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                        #{player.number||'?'} {player.firstName} {player.lastName}
+                      </div>
+                      <div style={{ fontSize:11, color:T.text2 }}>{pos?.label}</div>
+                    </div>
+                    <div style={{ display:'flex', gap:5, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                      {goals > 0 && <Badge bg={T.success} color="#fff"><Icon name="ball" size={10}/> {goals}</Badge>}
+                      {assists > 0 && <Badge bg={T.info} color="#fff"><Icon name="target" size={10}/> {assists}</Badge>}
+                      {save > 0 && <Badge bg={T.purple} color="#fff"><Icon name="glove" size={10}/> {save}</Badge>}
+                      {yellow > 0 && <Badge bg={T.warning} color="#fff"><Icon name="cardYellow" size={10}/> {yellow}</Badge>}
+                      {red > 0 && <Badge bg={T.danger} color="#fff"><Icon name="cardRed" size={10}/> {red}</Badge>}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </Card>
+      )}
+
+      {/* NOTES */}
+      {match.notes && match.notes.trim() && (
+        <Card padding={18} style={{ marginBottom:14 }}>
+          <SectionTitle>Notes coach</SectionTitle>
+          <div style={{
+            fontSize:14, color:T.text, lineHeight:1.6,
+            whiteSpace:'pre-wrap',
+            padding:14, background:T.card2, borderRadius:9,
+            border:`1px solid ${T.border}`,
+          }}>{match.notes}</div>
+        </Card>
+      )}
+
+      {/* BOTTOM ACTIONS */}
+      <Card padding={14}>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', justifyContent:'space-between' }}>
+          <Btn variant="primary" icon="edit" onClick={onEdit}>Modifier le match</Btn>
+          <Btn variant="danger" icon="trash" onClick={onDelete}>Supprimer</Btn>
+        </div>
+      </Card>
+
+      <ConfirmDialog open={!!confirmDelete} title="Supprimer ce match ?"
+        message="Cette action est irréversible. Tous les événements et stats seront perdus."
+        onConfirm={()=>deleteMatch(confirmDelete)} onCancel={()=>setConfirmDelete(null)}/>
+    </PageContainer>
   );
 }
 
