@@ -4071,24 +4071,54 @@ function CompositionView({ match, setMatch, lineup, form, players, T, available,
   return (
     <div>
       {/* HEADER STATS + ACTIONS */}
-      <Card padding={14} style={{ marginBottom:14 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-            <Badge bg={lineupCount===8?T.success:T.warningLight} color={lineupCount===8?'#fff':T.warning}>
-              {lineupCount}/8 titulaires
-            </Badge>
-            <Badge bg={T.card3} color={T.text2}>{match.bench.length} banc</Badge>
-            <Badge bg={T.card3} color={T.text2}>{match.absent.length} absent(s)</Badge>
+      <Card padding={12} style={{ marginBottom:14 }}>
+        {/* Mini-stats avec barre de progression */}
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10, flexWrap:'wrap' }}>
+          <div style={{ flex:1, minWidth:140 }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+              <span style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Titulaires</span>
+              <span style={{
+                fontSize:13, fontWeight:800, fontVariantNumeric:'tabular-nums',
+                color: lineupCount===8 ? T.success : (lineupCount>0 ? T.warning : T.text3),
+              }}>{lineupCount}/8</span>
+            </div>
+            <div style={{ width:'100%', height:6, borderRadius:3, background:T.card3, overflow:'hidden' }}>
+              <div style={{
+                width:`${(lineupCount/8)*100}%`, height:'100%',
+                background: lineupCount===8 ? T.success : T.warning,
+                transition:'width 0.25s',
+              }}/>
+            </div>
           </div>
-          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-            <Btn size="sm" variant="primary" icon="bookOpen" onClick={()=>setPresetModal(true)} title="Charger une compo préfaite">
-              Charger ({(matchPresets||[]).length})
-            </Btn>
-            <Btn size="sm" variant="secondary" icon="star" onClick={()=>{ setPresetName(''); setSaveModal(true); }}
-              disabled={lineupCount===0} title="Sauvegarder la compo actuelle">Sauver</Btn>
-            <Btn size="sm" variant="secondary" icon="refresh" onClick={doAutoCompose} title="Compose automatiquement selon les postes">Auto</Btn>
-            <Btn size="sm" variant="ghost" icon="close" onClick={clearAll} title="Vider tous les titulaires">Vider</Btn>
+          <div style={{ display:'flex', gap:6 }}>
+            <div style={{
+              padding:'6px 10px', borderRadius:8,
+              background:T.warningLight, color:T.warning,
+              fontSize:11, fontWeight:700, display:'flex', alignItems:'center', gap:5,
+            }}>
+              <Icon name="clipboard" size={11}/>{match.bench.length} banc
+            </div>
+            <div style={{
+              padding:'6px 10px', borderRadius:8,
+              background: match.absent.length>0 ? T.dangerLight : T.card3,
+              color: match.absent.length>0 ? T.danger : T.text2,
+              fontSize:11, fontWeight:700, display:'flex', alignItems:'center', gap:5,
+            }}>
+              <Icon name="close" size={11}/>{match.absent.length} abs.
+            </div>
           </div>
+        </div>
+
+        {/* Action bar */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))', gap:6, paddingTop:10, borderTop:`1px solid ${T.border}` }}>
+          <Btn size="sm" variant="secondary" icon="bookOpen" onClick={()=>setPresetModal(true)}
+            title="Charger une compo préfaite">Charger {(matchPresets||[]).length>0?`(${(matchPresets||[]).length})`:''}</Btn>
+          <Btn size="sm" variant="secondary" icon="star" onClick={()=>{ setPresetName(''); setSaveModal(true); }}
+            disabled={lineupCount===0} title="Sauvegarder la compo actuelle">Sauver</Btn>
+          <Btn size="sm" variant="secondary" icon="refresh" onClick={doAutoCompose}
+            title="Auto-compo selon les postes">Auto-compo</Btn>
+          <Btn size="sm" variant="ghost" icon="trash" onClick={clearAll}
+            disabled={lineupCount===0} title="Vider tous les titulaires">Vider</Btn>
         </div>
       </Card>
 
@@ -4180,16 +4210,29 @@ function CompositionView({ match, setMatch, lineup, form, players, T, available,
 
       {/* FORMATION FIELD (interactive) */}
       <Card padding={14} style={{ marginBottom:14 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:10, flexWrap:'wrap' }}>
-          <SectionTitle style={{ marginBottom:0 }}>Terrain — {form.label}</SectionTitle>
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+          <div style={{
+            display:'inline-flex', alignItems:'center', gap:6,
+            padding:'4px 11px', borderRadius:7,
+            background:T.accent+'15', color:T.accent,
+            fontSize:12, fontWeight:700, letterSpacing:0.2,
+          }}>
+            <Icon name="brain" size={13}/>
+            {form.label}
+          </div>
+          <div style={{ fontSize:11, color:T.text3, fontWeight:600, fontStyle:'italic' }}>
+            {form.desc}
+          </div>
         </div>
         <InteractiveField
           form={form} lineup={lineup} players={players} T={T}
           selectedPid={selectedPid} onSlotClick={slotClick}/>
-        <div style={{ marginTop:10, padding:'8px 12px', background:T.card2, borderRadius:8, fontSize:11.5, color:T.text2, textAlign:'center', lineHeight:1.4 }}>
-          {selectedPid
-            ? <><strong style={{ color:T.accent }}>Tape une case</strong> pour placer le joueur sélectionné</>
-            : <>Tape un joueur (terrain ou disponibles) pour le sélectionner, puis tape une case pour le déplacer</>}
+        <div style={{ marginTop:10, padding:'8px 12px', background:selectedPid?T.accentLight:T.card2, borderRadius:8, fontSize:11.5, color:selectedPid?T.accent:T.text2, textAlign:'center', lineHeight:1.4, transition:'all 0.15s', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+          {selectedPid ? (
+            <><Icon name="info" size={12}/><strong>Tape une case</strong> pour placer le joueur sélectionné</>
+          ) : (
+            <><Icon name="info" size={12}/>Tape un joueur, puis tape une case du terrain</>
+          )}
         </div>
       </Card>
 
@@ -4277,51 +4320,65 @@ function PlayerListSection({ title, subtitle, icon, players, T, colorKey, select
    INTERACTIVE FIELD (tap-to-place)
 ============================================================ */
 function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, compact=false }) {
-  /* HORIZONTAL field — own goal LEFT, attack RIGHT */
+  /* HORIZONTAL field — own goal LEFT, attack RIGHT
+     Proportions adaptées au format papier (paysage 8v8 ratio ~3:2)
+  */
+  const maxW = compact ? 380 : 460;
   return (
     <div style={{
       position:'relative', width:'100%',
-      paddingBottom: compact ? '52%' : '60%',
-      maxWidth: compact ? 520 : 640, margin:'0 auto',
-      background:'linear-gradient(90deg, #0a5d2e 0%, #0e7a3f 50%, #0a5d2e 100%)',
-      borderRadius:12, overflow:'hidden',
-      boxShadow: T.shadowMd,
+      paddingBottom:'62%',
+      maxWidth: maxW, margin:'0 auto',
+      background:`
+        radial-gradient(ellipse at center, rgba(255,255,255,0.04) 0%, transparent 70%),
+        linear-gradient(90deg, #0c5e2f 0%, #0f7842 50%, #0c5e2f 100%)
+      `,
+      borderRadius:14, overflow:'hidden',
+      boxShadow: T.shadowMd + ', inset 0 0 0 1px rgba(255,255,255,0.05)',
       userSelect:'none', WebkitTapHighlightColor:'transparent',
     }}>
-      {/* Field markings - horizontal layout */}
+      {/* Stripes effect for grass */}
+      <div style={{
+        position:'absolute', inset:0,
+        background:'repeating-linear-gradient(90deg, rgba(255,255,255,0.018) 0 8%, transparent 8% 16%)',
+        pointerEvents:'none',
+      }}/>
+
+      {/* Field markings - horizontal */}
       <div style={{ position:'absolute', inset:0 }}>
         <svg viewBox="0 0 100 60" width="100%" height="100%" preserveAspectRatio="none">
-          {/* outer border */}
-          <rect x="1.5" y="1.5" width="97" height="57" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          {/* halfway line */}
-          <line x1="50" y1="1.5" x2="50" y2="58.5" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          {/* center circle */}
-          <circle cx="50" cy="30" r="7" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          <circle cx="50" cy="30" r="0.7" fill="rgba(255,255,255,0.55)"/>
+          <rect x="2" y="2" width="96" height="56" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <line x1="50" y1="2" x2="50" y2="58" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <circle cx="50" cy="30" r="7" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <circle cx="50" cy="30" r="0.8" fill="rgba(255,255,255,0.7)"/>
           {/* Left penalty box */}
-          <rect x="1.5" y="18" width="12" height="24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          <rect x="1.5" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          {/* Left goal */}
-          <rect x="0.3" y="26" width="1.2" height="8" fill="rgba(255,255,255,0.25)"/>
+          <rect x="2" y="18" width="11" height="24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <rect x="2" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <circle cx="9" cy="30" r="0.7" fill="rgba(255,255,255,0.7)"/>
+          {/* Left goal posts */}
+          <line x1="2" y1="26" x2="2" y2="34" stroke="rgba(255,255,255,0.85)" strokeWidth="0.7"/>
           {/* Right penalty box */}
-          <rect x="86.5" y="18" width="12" height="24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          <rect x="94.5" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
-          {/* Right goal */}
-          <rect x="98.5" y="26" width="1.2" height="8" fill="rgba(255,255,255,0.25)"/>
+          <rect x="87" y="18" width="11" height="24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <rect x="94" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="0.35"/>
+          <circle cx="91" cy="30" r="0.7" fill="rgba(255,255,255,0.7)"/>
+          {/* Right goal posts */}
+          <line x1="98" y1="26" x2="98" y2="34" stroke="rgba(255,255,255,0.85)" strokeWidth="0.7"/>
         </svg>
       </div>
-      {/* Direction arrow + labels */}
+
+      {/* Top-left badge: RLFC */}
       <div style={{
-        position:'absolute', top:6, left:'50%', transform:'translateX(-50%)',
+        position:'absolute', top:6, left:8,
+        fontSize:9, fontWeight:800, color:'rgba(255,255,255,0.85)',
+        letterSpacing:1, textShadow:'0 1px 3px rgba(0,0,0,0.7)', pointerEvents:'none',
+      }}>RLFC</div>
+      {/* Top-right arrow */}
+      <div style={{
+        position:'absolute', top:6, right:8,
         fontSize:9, fontWeight:700, color:'rgba(255,255,255,0.7)',
-        letterSpacing:1, textTransform:'uppercase',
-        display:'flex', alignItems:'center', gap:6,
-        textShadow:'0 1px 2px rgba(0,0,0,0.5)', pointerEvents:'none',
-      }}>
-        <span>RLFC</span>
-        <span style={{ opacity:0.5 }}>→</span>
-        <span>ATTAQUE</span>
-      </div>
+        letterSpacing:0.5, textShadow:'0 1px 3px rgba(0,0,0,0.7)', pointerEvents:'none',
+        display:'inline-flex', alignItems:'center', gap:3,
+      }}>ATTAQUE →</div>
 
       {form.slots.map((slot, i) => {
         const pid = lineup[i];
@@ -4330,7 +4387,8 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, 
         const isSelected = pid && pid === selectedPid;
         const isEmpty = !player;
         const showPulse = selectedPid && isEmpty;
-        const size = compact ? 36 : 44;
+        const size = compact ? 30 : 38;
+        const posColor = pos?.color || '#fff';
         return (
           <button key={i} onClick={()=>onSlotClick && onSlotClick(i)}
             className={showPulse ? 'pulse' : ''}
@@ -4340,28 +4398,44 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, 
               background:'transparent', border:'none', padding:0,
               cursor: onSlotClick ? 'pointer' : 'default',
               textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:1,
+              zIndex: isSelected ? 5 : 1,
             }}>
+            {/* CIRCLE */}
             <div style={{
               width:size, height:size, borderRadius:'50%',
-              background: player ? (isSelected ? T.accent : '#fff') : 'rgba(255,255,255,0.18)',
-              border:`2.5px solid ${isSelected ? T.accent : (pos?.color || '#fff')}`,
+              background: player
+                ? (isSelected ? T.accent : '#FAFAFA')
+                : 'rgba(0,0,0,0.45)',
+              border: player
+                ? `2px solid ${isSelected ? '#fff' : posColor}`
+                : `1.5px dashed ${posColor}AA`,
               display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize: compact ? 12 : 14, fontWeight:800,
-              color: player ? (isSelected ? '#fff' : '#1C1C1E') : 'rgba(255,255,255,0.7)',
-              boxShadow: isSelected ? `0 0 0 4px ${T.accent}40, 0 2px 8px rgba(0,0,0,0.4)` : '0 2px 8px rgba(0,0,0,0.3)',
-              transition:'all 0.2s',
+              fontSize: player ? (compact ? 12 : 14) : (compact ? 9 : 10),
+              fontWeight:800,
+              color: player
+                ? (isSelected ? '#fff' : '#0F1419')
+                : posColor,
+              boxShadow: isSelected
+                ? `0 0 0 4px ${T.accent}55, 0 3px 10px rgba(0,0,0,0.5)`
+                : (player ? '0 2px 6px rgba(0,0,0,0.35)' : 'none'),
+              transition:'all 0.18s',
+              letterSpacing: player ? 0 : 0.3,
             }}>
-              {player ? (player.number || (player.firstName?.[0]||'?')) : (
-                <Icon name="plus" size={compact?14:16} color="rgba(255,255,255,0.5)"/>
-              )}
+              {player
+                ? (player.number || (player.firstName?.[0]||'?'))
+                : (pos?.short || slot.pos)
+              }
             </div>
-            <div style={{
-              fontSize: compact ? 8.5 : 9.5, fontWeight:700, color:'#fff', marginTop:2,
-              textShadow:'0 1px 2px rgba(0,0,0,0.8)',
-              whiteSpace:'nowrap', maxWidth: compact?60:72, overflow:'hidden', textOverflow:'ellipsis',
-              padding:'1px 5px', borderRadius:4,
-              background: player ? 'transparent' : 'rgba(0,0,0,0.4)',
-            }}>{player ? (player.lastName || player.firstName) : pos?.short || slot.pos}</div>
+            {/* NAME (only filled) */}
+            {player && (
+              <div style={{
+                fontSize: compact ? 8 : 9,
+                fontWeight:700, color:'#fff', marginTop:2,
+                textShadow:'0 1px 2px rgba(0,0,0,0.85), 0 0 4px rgba(0,0,0,0.6)',
+                whiteSpace:'nowrap', maxWidth: compact?52:64, overflow:'hidden', textOverflow:'ellipsis',
+                letterSpacing:0.1,
+              }}>{player.lastName || player.firstName}</div>
+            )}
           </button>
         );
       })}
