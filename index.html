@@ -831,6 +831,9 @@ const newMatch = () => ({
   transport:'',              // co-voiturage, bus club, etc.
   weather:'',
   specialInstructions:'',    // équipement spécifique, allergies, etc.
+  // Sélection préalable (qui est convoqué pour ce match)
+  // undefined / null = tous les joueurs convoqués (backward compat)
+  convoked: null,
   // Composition
   lineup:[],
   bench:[],
@@ -903,6 +906,18 @@ function computePlayingTimes(match, players) {
     r.percent = matchDuration > 0 ? r.minutes / matchDuration : 0;
   });
   return result;
+}
+
+/* ============================================================
+   CONVOKED helpers
+============================================================ */
+function isConvoked(match, pid) {
+  // null/undefined convoked = tout le monde convoqué (backward compat)
+  if (!match.convoked || !Array.isArray(match.convoked)) return true;
+  return match.convoked.includes(pid);
+}
+function convokedPlayers(match, players) {
+  return (players || []).filter(p => isConvoked(match, p.id));
 }
 
 function playerSeasonMinutes(matches, pid) {
@@ -3777,12 +3792,15 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
     }
   }, [match.formation]);
 
-  // Lists derived
-  const available = players.filter(p =>
+  // Lists derived — filtrées sur les convoqués uniquement
+  const convokedList = useMemo(() => convokedPlayers(match, players), [match.convoked, players]);
+  const convokedSet = useMemo(() => new Set(convokedList.map(p => p.id)), [convokedList]);
+
+  const available = convokedList.filter(p =>
     !lineupSet.has(p.id) && !match.bench.includes(p.id) && !match.absent.includes(p.id)
   );
-  const benchPlayers = match.bench.map(pid => players.find(p => p.id === pid)).filter(Boolean);
-  const absentPlayers = match.absent.map(pid => players.find(p => p.id === pid)).filter(Boolean);
+  const benchPlayers = match.bench.map(pid => convokedList.find(p => p.id === pid)).filter(Boolean);
+  const absentPlayers = match.absent.map(pid => convokedList.find(p => p.id === pid)).filter(Boolean);
   const lineupCount = lineupPids(lineup).length;
 
   // ====== Tap-to-place logic ======
@@ -3883,7 +3901,7 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
         )}
       </div>
 
-      <Tabs tabs={['Infos','Composition','Notes']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
+      <Tabs tabs={['Infos','Sélection','Composition','Notes']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
 
       {tab === 0 && (
         <div style={{ display:'grid', gap:14 }}>
@@ -3994,8 +4012,14 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
       )}
 
       {tab === 1 && (
+        <SelectionView match={match} setMatch={setMatch} players={players} T={T}
+          showToast={showToast} onContinue={()=>setTab(2)}/>
+      )}
+
+      {tab === 2 && (
         <CompositionView
-          match={match} setMatch={setMatch} lineup={lineup} form={form} players={players} T={T}
+          match={match} setMatch={setMatch} lineup={lineup} form={form}
+          players={convokedList} T={T}
           available={available} benchPlayers={benchPlayers} absentPlayers={absentPlayers}
           lineupCount={lineupCount}
           selectedPid={selectedPid} setSelectedPid={selectPlayer}
@@ -4004,10 +4028,10 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
           clearAll={clearAll} doAutoCompose={doAutoCompose}
           onFormationChange={(f)=>setMatch({...match, formation:f})}
           matchPresets={matchPresets} setMatchPresets={setMatchPresets}
-          showToast={showToast}/>
+          showToast={showToast} onGoSelection={()=>setTab(1)}/>
       )}
 
-      {tab === 2 && (
+      {tab === 3 && (
         <Card padding={18}>
           <SectionTitle>Notes & consignes</SectionTitle>
           <Textarea value={match.notes} onChange={v=>setMatch({...match, notes:v})}
@@ -4031,10 +4055,251 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
 /* ============================================================
    COMPOSITION VIEW (tap-to-place tablet-friendly)
 ============================================================ */
-function CompositionView({ match, setMatch, lineup, form, players, T, available, benchPlayers, absentPlayers, lineupCount, selectedPid, setSelectedPid, slotClick, sendToBench, sendToAbsent, sendToAvailable, clearAll, doAutoCompose, onFormationChange, matchPresets, setMatchPresets, showToast }) {
+/* ============================================================
+   SELECTION VIEW — qui est convoqué pour ce match
+============================================================ */
+function SelectionView({ match, setMatch, players, T, showToast, onContinue }) {
+  // convoked list state derived from match
+  const convokedSet = useMemo(() => {
+    if (!match.convoked || !Array.isArray(match.convoked)) {
+      // null = all by default
+      return new Set(players.map(p => p.id));
+    }
+    return new Set(match.convoked);
+  }, [match.convoked, players]);
+
+  // Persist current selection in match if convoked is still null
+  useEffect(() => {
+    if (!match.convoked || !Array.isArray(match.convoked)) {
+      // initialize with all players
+      setMatch({ ...match, convoked: players.map(p => p.id) });
+    }
+  }, []);
+
+  function togglePlayer(pid) {
+    const next = new Set(convokedSet);
+    if (next.has(pid)) {
+      next.delete(pid);
+      // Auto-remove from lineup/bench/absent
+      const newLineup = clearPidFromLineup(ensureLineupArray(match), pid);
+      const newBench = (match.bench||[]).filter(x => x !== pid);
+      const newAbsent = (match.absent||[]).filter(x => x !== pid);
+      setMatch({ ...match, convoked: Array.from(next), lineup: newLineup, bench: newBench, absent: newAbsent });
+    } else {
+      next.add(pid);
+      setMatch({ ...match, convoked: Array.from(next) });
+    }
+  }
+  function selectAll() {
+    setMatch({ ...match, convoked: players.map(p => p.id) });
+    showToast && showToast('Tous les joueurs convoqués', 'success');
+  }
+  function selectNone() {
+    // Auto-clear lineup/bench/absent
+    setMatch({ ...match, convoked: [], lineup: [], bench: [], absent: [] });
+  }
+  function invert() {
+    const next = players.filter(p => !convokedSet.has(p.id)).map(p => p.id);
+    // Clear lineup/bench/absent for un-convoked
+    const ng = new Set(next);
+    const newLineup = ensureLineupArray(match).map(pid => (pid && ng.has(pid)) ? pid : null);
+    const newBench = (match.bench||[]).filter(pid => ng.has(pid));
+    const newAbsent = (match.absent||[]).filter(pid => ng.has(pid));
+    setMatch({ ...match, convoked: next, lineup: newLineup, bench: newBench, absent: newAbsent });
+  }
+
+  const sortedPlayers = useMemo(() => {
+    return [...players].sort((a,b) => {
+      const na = Number(a.number) || 999, nb = Number(b.number) || 999;
+      if (na !== nb) return na - nb;
+      return (a.lastName||'').localeCompare(b.lastName||'');
+    });
+  }, [players]);
+
+  const count = convokedSet.size;
+  const eightOk = count >= 8;
+
+  return (
+    <div>
+      <Card padding={14} style={{ marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <div style={{
+            width:54, height:54, borderRadius:12,
+            background: eightOk ? T.success : T.warningLight,
+            color: eightOk ? '#fff' : T.warning,
+            display:'flex', alignItems:'center', justifyContent:'center',
+            flexShrink:0, fontSize:18, fontWeight:800, fontVariantNumeric:'tabular-nums',
+          }}>{count}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:14, fontWeight:800, color:T.text }}>
+              {count} joueur{count>1?'s':''} convoqué{count>1?'s':''}
+            </div>
+            <div style={{ fontSize:12, color:T.text2, marginTop:2 }}>
+              sur {players.length} dans le groupe · {eightOk ? `${count - 8} remplaçant(s) potentiel(s)` : <span style={{ color:T.warning, fontWeight:600 }}>⚠ minimum 8 joueurs requis</span>}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))', gap:6, marginTop:12, paddingTop:12, borderTop:`1px solid ${T.border}` }}>
+          <Btn size="sm" variant="success" icon="check" onClick={selectAll}>Tous</Btn>
+          <Btn size="sm" variant="ghost" icon="refresh" onClick={invert}>Inverser</Btn>
+          <Btn size="sm" variant="ghost" icon="close" onClick={selectNone}>Aucun</Btn>
+        </div>
+      </Card>
+
+      {players.length === 0 ? (
+        <Card>
+          <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
+        </Card>
+      ) : (
+        <Card padding={12}>
+          <SectionTitle>Effectif disponible ({players.length})</SectionTitle>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))', gap:6 }}>
+            {sortedPlayers.map(p => {
+              const isConv = convokedSet.has(p.id);
+              const pos = POSITIONS.find(x => x.id === p.position);
+              return (
+                <button key={p.id} onClick={()=>togglePlayer(p.id)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:10,
+                    padding:'8px 12px 8px 8px',
+                    background: isConv ? T.success+'15' : T.card2,
+                    color: T.text,
+                    border:`1.5px solid ${isConv ? T.success+'60' : T.border}`,
+                    borderRadius:10, cursor:'pointer',
+                    transition:'all 0.12s', textAlign:'left',
+                    fontWeight:600,
+                  }}>
+                  <span style={{
+                    width:22, height:22, borderRadius:6, flexShrink:0,
+                    background: isConv ? T.success : 'transparent',
+                    border:`2px solid ${isConv ? T.success : T.borderStrong}`,
+                    display:'inline-flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                    {isConv && <Icon name="check" size={14} color="#fff" strokeWidth={3}/>}
+                  </span>
+                  <Avatar name={`${p.firstName} ${p.lastName}`} size={32} color={pos?.color}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      <span style={{ opacity:0.7 }}>#{p.number||'?'}</span> {p.firstName} {p.lastName}
+                    </div>
+                    {pos && <div style={{ fontSize:10, color:pos.color, fontWeight:700, letterSpacing:0.3 }}>{pos.short}</div>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {eightOk && (
+        <div style={{ marginTop:14 }}>
+          <Btn fullWidth size="lg" variant="primary" icon="arrowRight" onClick={onContinue}>
+            Passer à la composition
+          </Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompositionView({ match, setMatch, lineup, form, players, T, available, benchPlayers, absentPlayers, lineupCount, selectedPid, setSelectedPid, slotClick, sendToBench, sendToAbsent, sendToAvailable, clearAll, doAutoCompose, onFormationChange, matchPresets, setMatchPresets, showToast, onGoSelection }) {
   const [presetModal, setPresetModal] = useState(false);
   const [saveModal, setSaveModal] = useState(false);
   const [presetName, setPresetName] = useState('');
+
+  /* ===== DRAG-AND-DROP STATE ===== */
+  const [drag, setDrag] = useState(null);
+  // drag: { pid, startX, startY, x, y, active, dropTarget }
+  const dragRef = useRef(null);
+  dragRef.current = drag;
+
+  // Effect: listen pointer move/up globally when drag started
+  useEffect(() => {
+    if (!drag) return;
+    function onMove(e) {
+      const ev = e.touches ? e.touches[0] : e;
+      const d = dragRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX;
+      const dy = ev.clientY - d.startY;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      // Active drag once moved enough
+      const active = d.active || dist > 8;
+      // Find drop target if active
+      let dropTarget = null;
+      if (active) {
+        const el = document.elementFromPoint(ev.clientX, ev.clientY);
+        const target = el?.closest('[data-drop]');
+        if (target) {
+          dropTarget = {
+            kind: target.dataset.drop,
+            slotIdx: target.dataset.slotIdx ? parseInt(target.dataset.slotIdx, 10) : null,
+          };
+        }
+        e.preventDefault?.();
+      }
+      setDrag({ ...d, x: ev.clientX, y: ev.clientY, active, dropTarget });
+    }
+    function onUp(e) {
+      const d = dragRef.current;
+      if (!d) return;
+      if (d.active && d.dropTarget) {
+        handleDrop(d.pid, d.dropTarget);
+      } else if (!d.active) {
+        // Was just a tap → toggle selection (existing behavior)
+        setSelectedPid(d.pid);
+      }
+      setDrag(null);
+    }
+    window.addEventListener('pointermove', onMove, { passive:false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [drag?.pid]);
+
+  function startDrag(pid, e) {
+    const ev = e.touches ? e.touches[0] : e;
+    setDrag({ pid, startX: ev.clientX, startY: ev.clientY, x: ev.clientX, y: ev.clientY, active: false, dropTarget: null });
+  }
+
+  function handleDrop(pid, target) {
+    if (target.kind === 'slot' && target.slotIdx !== null) {
+      // Place pid in slot; if slot has another player, swap or send them where pid came from
+      const newLineup = [...lineup];
+      const currentInSlot = newLineup[target.slotIdx];
+      const pidCurrentIdx = newLineup.findIndex(p => p === pid);
+      if (pidCurrentIdx >= 0) {
+        // Pid was already on field → swap
+        newLineup[pidCurrentIdx] = currentInSlot;
+        newLineup[target.slotIdx] = pid;
+        setMatch({ ...match, lineup: newLineup });
+      } else {
+        // Pid was from bench/absent/available
+        newLineup[target.slotIdx] = pid;
+        let newBench = (match.bench||[]).filter(x => x !== pid);
+        let newAbsent = (match.absent||[]).filter(x => x !== pid);
+        // If slot was occupied, send old player to bench
+        if (currentInSlot && !newBench.includes(currentInSlot)) {
+          newBench.push(currentInSlot);
+        }
+        setMatch({ ...match, lineup: newLineup, bench: newBench, absent: newAbsent });
+      }
+    } else if (target.kind === 'bench') {
+      sendToBench(pid);
+    } else if (target.kind === 'absent') {
+      sendToAbsent(pid);
+    } else if (target.kind === 'available') {
+      sendToAvailable(pid);
+    }
+    setSelectedPid(null);
+  }
+
+  const draggedPlayer = drag?.active ? players.find(p => p.id === drag.pid) : null;
 
   const selectedPlayer = selectedPid ? players.find(p => p.id === selectedPid) : null;
   const selectedLocation = selectedPid
@@ -4240,7 +4505,10 @@ function CompositionView({ match, setMatch, lineup, form, players, T, available,
           </div>
           <InteractiveField
             form={form} lineup={lineup} players={players} T={T}
-            selectedPid={selectedPid} onSlotClick={slotClick}/>
+            selectedPid={selectedPid} onSlotClick={slotClick}
+            onSlotDragStart={startDrag}
+            dragActivePid={drag?.active ? drag.pid : null}
+            dropTarget={drag?.active ? drag.dropTarget : null}/>
           <div style={{ marginTop:10, padding:'8px 12px', background:selectedPid?T.accentLight:T.card2, borderRadius:8, fontSize:11.5, color:selectedPid?T.accent:T.text2, textAlign:'center', lineHeight:1.4, transition:'all 0.15s', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
             {selectedPid ? (
               <><Icon name="info" size={12}/><strong>Tape une case</strong> pour placer le joueur sélectionné</>
@@ -4254,40 +4522,80 @@ function CompositionView({ match, setMatch, lineup, form, players, T, available,
         <div className="compo-side">
           {players.length === 0 ? (
             <Card>
-              <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
+              <EmptyState icon="users" title="Aucun joueur convoqué"
+                message="Va dans l'onglet Sélection pour convoquer les joueurs"
+                action={onGoSelection && <Btn variant="primary" icon="users" onClick={onGoSelection}>Sélection</Btn>}/>
             </Card>
           ) : (
             <Card padding={12}>
               <PlayerListSection title="Disponibles" subtitle={`${available.length} non affecté(s)`} icon="users"
                 players={available} T={T} colorKey="info"
                 selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-                emptyText="Tous les joueurs sont affectés" compact={true}/>
+                emptyText="Tous les joueurs sont affectés" compact={true}
+                dropKind="available" onPlayerDragStart={startDrag}
+                dragActivePid={drag?.active ? drag.pid : null}
+                dropTarget={drag?.active ? drag.dropTarget : null}/>
 
               <div style={{ height:1, background:T.border, margin:'12px 0' }}/>
 
               <PlayerListSection title="Banc" subtitle={`${benchPlayers.length} remplaçant(s)`} icon="clipboard"
                 players={benchPlayers} T={T} colorKey="warning"
                 selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-                emptyText="Aucun remplaçant" compact={true}/>
+                emptyText="Aucun remplaçant" compact={true}
+                dropKind="bench" onPlayerDragStart={startDrag}
+                dragActivePid={drag?.active ? drag.pid : null}
+                dropTarget={drag?.active ? drag.dropTarget : null}/>
 
               <div style={{ height:1, background:T.border, margin:'12px 0' }}/>
 
               <PlayerListSection title="Absents" subtitle={`${absentPlayers.length} non disponible(s)`} icon="close"
                 players={absentPlayers} T={T} colorKey="danger"
                 selectedPid={selectedPid} onPlayerClick={setSelectedPid}
-                emptyText="Aucun absent" compact={true}/>
+                emptyText="Aucun absent" compact={true}
+                dropKind="absent" onPlayerDragStart={startDrag}
+                dragActivePid={drag?.active ? drag.pid : null}
+                dropTarget={drag?.active ? drag.dropTarget : null}/>
             </Card>
           )}
         </div>
       </div>
+
+      {/* DRAG PREVIEW (floating element following pointer) */}
+      {drag?.active && draggedPlayer && ReactDOM.createPortal(
+        <div style={{
+          position:'fixed', left:drag.x, top:drag.y,
+          transform:'translate(-50%, -50%)',
+          pointerEvents:'none', zIndex:99999,
+          padding:'7px 14px 7px 6px',
+          background:T.accent, color:'#fff',
+          borderRadius:999,
+          display:'flex', alignItems:'center', gap:8,
+          boxShadow:'0 8px 24px rgba(0,0,0,0.4), 0 0 0 4px rgba(255,55,95,0.25)',
+          fontWeight:700, fontSize:13,
+          opacity:0.95,
+        }}>
+          <Avatar name={`${draggedPlayer.firstName} ${draggedPlayer.lastName}`} size={28}
+            color={POSITIONS.find(x=>x.id===draggedPlayer.position)?.color}/>
+          <span>#{draggedPlayer.number||'?'} {draggedPlayer.lastName || draggedPlayer.firstName}</span>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
 
-function PlayerListSection({ title, subtitle, icon, players, T, colorKey, selectedPid, onPlayerClick, emptyText, compact=false }) {
+function PlayerListSection({ title, subtitle, icon, players, T, colorKey, selectedPid, onPlayerClick, emptyText, compact=false, dropKind=null, onPlayerDragStart=null, dragActivePid=null, dropTarget=null }) {
   const color = T[colorKey];
+  const isThisDropTarget = dropTarget && dropTarget.kind === dropKind;
   return (
-    <div>
+    <div data-drop={dropKind || undefined}
+      style={{
+        background: isThisDropTarget ? color+'22' : 'transparent',
+        border: isThisDropTarget ? `2px dashed ${color}` : `2px dashed transparent`,
+        borderRadius: 10,
+        padding: isThisDropTarget ? 4 : 0,
+        transition: 'background 0.15s, padding 0.1s',
+      }}>
       <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
         <div style={{
           width:24, height:24, borderRadius:7,
@@ -4302,25 +4610,30 @@ function PlayerListSection({ title, subtitle, icon, players, T, colorKey, select
         </div>
       </div>
       {players.length === 0 ? (
-        <div style={{ padding:'8px 10px', background:T.card2, borderRadius:7, fontSize:11, color:T.text3, textAlign:'center', fontStyle:'italic' }}>
-          {emptyText}
+        <div data-drop={dropKind || undefined}
+          style={{ padding:'14px 10px', background:isThisDropTarget?color+'10':T.card2, borderRadius:7, fontSize:11, color:isThisDropTarget?color:T.text3, textAlign:'center', fontStyle:'italic', fontWeight:isThisDropTarget?700:400 }}>
+          {isThisDropTarget ? '⤓ Lâcher ici' : emptyText}
         </div>
       ) : (
         <div style={{ display:'flex', flexDirection: compact ? 'column' : 'row', flexWrap: compact ? 'nowrap' : 'wrap', gap:4 }}>
           {players.map(p => {
             const isSelected = selectedPid === p.id;
+            const isDragging = dragActivePid === p.id;
             const pos = POSITIONS.find(x => x.id === p.position);
             return (
               <button key={p.id} onClick={()=>onPlayerClick(p.id)}
+                onPointerDown={(e)=>{ if (onPlayerDragStart) onPlayerDragStart(p.id, e); }}
                 style={{
                   display:'flex', alignItems:'center', gap:7, width:'100%',
                   padding:'5px 9px 5px 5px',
                   background: isSelected ? T.accent : T.card2,
                   color: isSelected ? '#fff' : T.text,
                   border:`1.5px solid ${isSelected ? T.accent : T.border}`,
-                  borderRadius: compact ? 8 : 999, cursor:'pointer',
+                  borderRadius: compact ? 8 : 999, cursor:'grab',
                   transition:'all 0.12s',
                   fontWeight:600, textAlign:'left',
+                  opacity: isDragging ? 0.35 : 1,
+                  touchAction:'none',
                 }}>
                 <Avatar name={`${p.firstName} ${p.lastName}`} size={24} color={pos?.color}/>
                 <span style={{ fontSize:12, flex:1, minWidth:0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
@@ -4345,7 +4658,7 @@ function PlayerListSection({ title, subtitle, icon, players, T, colorKey, select
 /* ============================================================
    INTERACTIVE FIELD (tap-to-place)
 ============================================================ */
-function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, compact=false }) {
+function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, onSlotDragStart, compact=false, dragActivePid=null, dropTarget=null }) {
   /* HORIZONTAL field — own goal LEFT, attack RIGHT */
   const paddingBottom = compact ? '54%' : '58%';
   return (
@@ -4413,16 +4726,24 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, 
         const showPulse = selectedPid && isEmpty;
         const size = compact ? 30 : 38;
         const posColor = pos?.color || '#fff';
+        const isDropHover = dropTarget && dropTarget.kind === 'slot' && dropTarget.slotIdx === i;
+        const isDragging = dragActivePid && dragActivePid === pid;
         return (
-          <button key={i} onClick={()=>onSlotClick && onSlotClick(i)}
+          <button key={i}
+            data-drop="slot" data-slot-idx={i}
+            onClick={()=>onSlotClick && onSlotClick(i)}
+            onPointerDown={(e)=>{ if (player && onSlotDragStart) onSlotDragStart(player.id, e); }}
             className={showPulse ? 'pulse' : ''}
             style={{
               position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`,
-              transform:'translate(-50%,-50%)',
+              transform: `translate(-50%,-50%) scale(${isDropHover ? 1.18 : 1})`,
               background:'transparent', border:'none', padding:0,
-              cursor: onSlotClick ? 'pointer' : 'default',
+              cursor: onSlotClick ? (player ? 'grab' : 'pointer') : 'default',
               textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:1,
-              zIndex: isSelected ? 5 : 1,
+              zIndex: isSelected || isDropHover ? 5 : 1,
+              transition:'transform 0.15s',
+              opacity: isDragging ? 0.35 : 1,
+              touchAction:'none',
             }}>
             {/* CIRCLE */}
             <div style={{
@@ -4430,10 +4751,10 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, 
               width:size, height:size, borderRadius:'50%',
               background: player
                 ? (isSelected ? T.accent : '#FAFAFA')
-                : 'rgba(0,0,0,0.55)',
+                : (isDropHover ? T.accent : 'rgba(0,0,0,0.55)'),
               border: player
                 ? `2px solid ${isSelected ? '#fff' : posColor}`
-                : `2px dashed rgba(255,255,255,0.75)`,
+                : `2px ${isDropHover?'solid':'dashed'} ${isDropHover ? '#fff' : 'rgba(255,255,255,0.75)'}`,
               display:'flex', alignItems:'center', justifyContent:'center',
               fontSize: player ? (compact ? 12 : 14) : (compact ? 10 : 11),
               fontWeight:800,
