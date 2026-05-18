@@ -349,38 +349,42 @@ function isTrainingDay(date) {
   return SEASON_MONTHS_ON.includes(d.getMonth()) && TRAINING_DAYS.includes(d.getDay());
 }
 
-/* Formations 8v8 - Belgian U12 IRIS ELITE format */
+/* Formations 8v8 - Belgian U12 IRIS ELITE format
+   Coordinates: HORIZONTAL field (own goal LEFT, attack to RIGHT)
+   x: 0 (own goal) → 100 (opponent goal)
+   y: 0 (top of field) → 100 (bottom of field)
+*/
 const FORMATIONS_8V8 = [
   { id:'1-3-3-1', label:'1-3-3-1 (offensif)', desc:'Pressing haut, jeu offensif',
     slots:[
-      { pos:'GK', x:50, y:90 },
-      { pos:'DG', x:20, y:70 }, { pos:'DC', x:50, y:72 }, { pos:'DD', x:80, y:70 },
-      { pos:'MG', x:20, y:45 }, { pos:'MC', x:50, y:45 }, { pos:'MD', x:80, y:45 },
-      { pos:'AC', x:50, y:18 }
+      { pos:'GK', x:8,  y:50 },
+      { pos:'DG', x:28, y:18 }, { pos:'DC', x:25, y:50 }, { pos:'DD', x:28, y:82 },
+      { pos:'MG', x:55, y:18 }, { pos:'MC', x:52, y:50 }, { pos:'MD', x:55, y:82 },
+      { pos:'AC', x:82, y:50 }
     ]
   },
   { id:'1-2-3-2', label:'1-2-3-2 (équilibré)', desc:'Polyvalence et largeur',
     slots:[
-      { pos:'GK', x:50, y:90 },
-      { pos:'DC', x:35, y:72 }, { pos:'DC', x:65, y:72 },
-      { pos:'MG', x:18, y:48 }, { pos:'MC', x:50, y:50 }, { pos:'MD', x:82, y:48 },
-      { pos:'AG', x:35, y:20 }, { pos:'AD', x:65, y:20 }
+      { pos:'GK', x:8,  y:50 },
+      { pos:'DC', x:25, y:32 }, { pos:'DC', x:25, y:68 },
+      { pos:'MG', x:52, y:15 }, { pos:'MC', x:50, y:50 }, { pos:'MD', x:52, y:85 },
+      { pos:'AG', x:80, y:32 }, { pos:'AD', x:80, y:68 }
     ]
   },
   { id:'1-3-2-2', label:'1-3-2-2 (défensif)', desc:'Bloc bas, contre-attaques',
     slots:[
-      { pos:'GK', x:50, y:90 },
-      { pos:'DG', x:20, y:70 }, { pos:'DC', x:50, y:72 }, { pos:'DD', x:80, y:70 },
-      { pos:'MC', x:35, y:48 }, { pos:'MC', x:65, y:48 },
-      { pos:'AG', x:35, y:20 }, { pos:'AD', x:65, y:20 }
+      { pos:'GK', x:8,  y:50 },
+      { pos:'DG', x:28, y:18 }, { pos:'DC', x:25, y:50 }, { pos:'DD', x:28, y:82 },
+      { pos:'MC', x:52, y:35 }, { pos:'MC', x:52, y:65 },
+      { pos:'AG', x:80, y:35 }, { pos:'AD', x:80, y:65 }
     ]
   },
   { id:'1-2-2-3', label:'1-2-2-3 (très offensif)', desc:'Pression haute permanente',
     slots:[
-      { pos:'GK', x:50, y:90 },
-      { pos:'DC', x:35, y:72 }, { pos:'DC', x:65, y:72 },
-      { pos:'MC', x:35, y:50 }, { pos:'MC', x:65, y:50 },
-      { pos:'AG', x:22, y:18 }, { pos:'AC', x:50, y:18 }, { pos:'AD', x:78, y:18 }
+      { pos:'GK', x:8,  y:50 },
+      { pos:'DC', x:25, y:32 }, { pos:'DC', x:25, y:68 },
+      { pos:'MC', x:50, y:32 }, { pos:'MC', x:50, y:68 },
+      { pos:'AG', x:80, y:20 }, { pos:'AC', x:80, y:50 }, { pos:'AD', x:80, y:80 }
     ]
   },
 ];
@@ -495,7 +499,7 @@ const EVENT_TYPES = [
   { id:'assist',       label:'Passe déc.',    icon:'target',       color:'#0A84FF', sideUs:true },
   { id:'yellow',       label:'Carton jaune',  icon:'cardYellow',   color:'#F59E0B', sideUs:true },
   { id:'red',          label:'Carton rouge',  icon:'cardRed',      color:'#FF3B30', sideUs:true },
-  { id:'sub',          label:'Changement',    icon:'substitution', color:'#0A84FF', sideUs:true },
+  { id:'substitution', label:'Changement',    icon:'substitution', color:'#0A84FF', sideUs:true },
   { id:'save',         label:'Arrêt',         icon:'glove',        color:'#AF52DE', sideUs:true },
   { id:'incident',     label:'Incident',      icon:'alert',        color:'#FF9500', sideUs:true },
 ];
@@ -780,6 +784,20 @@ function sessionDisplayTheme(session) {
   return labels.join(' · ');
 }
 
+const KIT_COLORS = [
+  { id:'home',    label:'Maillot domicile (bordeaux/blanc)', color:'#C41E3A' },
+  { id:'away',    label:'Maillot extérieur (blanc)',         color:'#FFFFFF' },
+  { id:'third',   label:'Maillot alternatif',                 color:'#1C1C1E' },
+];
+
+const WEATHER_OPTIONS = [
+  { id:'sun',   label:'Soleil',            icon:'sun' },
+  { id:'cloud', label:'Nuageux',           icon:'clock' },
+  { id:'rain',  label:'Pluie',             icon:'pin' },
+  { id:'cold',  label:'Froid / Gel',       icon:'alert' },
+  { id:'wind',  label:'Vent fort',         icon:'refresh' },
+];
+
 const newMatch = () => ({
   id: uid(),
   date: todayIso(),
@@ -787,12 +805,25 @@ const newMatch = () => ({
   type:'championnat',
   opponent:'',
   location:'',
+  address:'',
   domicile:true,
   duration:60,
   formation:'1-3-3-1',
+  // Organisation
+  arrivalTime:'',            // ex: '13:15'
+  meetingPoint:'',           // ex: 'Parking du stade'
+  kitColor:'home',
+  referee:'',
+  contactName:'',
+  contactPhone:'',
+  transport:'',              // co-voiturage, bus club, etc.
+  weather:'',
+  specialInstructions:'',    // équipement spécifique, allergies, etc.
+  // Composition
   lineup:[],
   bench:[],
   absent:[],
+  // Live
   events:[],
   score:{ us:0, them:0 },
   status:'prepared', // prepared | live | done
@@ -800,6 +831,84 @@ const newMatch = () => ({
   ratings:{},
   createdAt: nowMs(),
 });
+
+/* ============================================================
+   PLAYING TIME helpers (conformité ACFF)
+============================================================ */
+function computePlayingTimes(match, players) {
+  /* Retourne un map { playerId: { minutes, inAt, outAt, status } } */
+  const result = {};
+  const lineup = ensureLineupArray(match);
+  const matchDuration = match.duration || 60;
+
+  // Titulaires : sur le terrain à la minute 0
+  lineupPids(lineup).forEach(pid => {
+    result[pid] = { minutes: matchDuration, inAt: 0, outAt: matchDuration, status:'starter', segments:[{in:0, out:matchDuration}] };
+  });
+  // Banc : non joué par défaut
+  (match.bench || []).forEach(pid => {
+    if (!result[pid]) result[pid] = { minutes: 0, inAt: null, outAt: null, status:'bench', segments:[] };
+  });
+  // Absents : pas de minute
+  (match.absent || []).forEach(pid => {
+    if (!result[pid]) result[pid] = { minutes: 0, inAt: null, outAt: null, status:'absent', segments:[] };
+  });
+
+  // Appliquer les changements (substitutions) dans l'ordre chronologique
+  const subs = (match.events || [])
+    .filter(e => e.type === 'substitution' || e.type === 'sub')
+    .filter(e => e.playerOutId || e.playerInId)
+    .sort((a,b) => (a.minute||0) - (b.minute||0));
+
+  subs.forEach(sub => {
+    const m = sub.minute || 0;
+    if (sub.playerOutId && result[sub.playerOutId]) {
+      const r = result[sub.playerOutId];
+      // Clore le dernier segment ouvert
+      const last = r.segments[r.segments.length-1];
+      if (last && last.out === matchDuration) {
+        last.out = m;
+      }
+      r.outAt = m;
+    }
+    if (sub.playerInId) {
+      if (!result[sub.playerInId]) {
+        result[sub.playerInId] = { minutes: 0, inAt: m, outAt: matchDuration, status:'sub_in', segments: [{in:m, out:matchDuration}] };
+      } else {
+        const r = result[sub.playerInId];
+        r.segments.push({ in: m, out: matchDuration });
+        if (r.inAt === null) r.inAt = m;
+        r.outAt = matchDuration;
+        if (r.status === 'bench') r.status = 'sub_in';
+      }
+    }
+  });
+
+  // Calcul total minutes
+  Object.keys(result).forEach(pid => {
+    const r = result[pid];
+    r.minutes = r.segments.reduce((sum, seg) => sum + Math.max(0, (seg.out||0) - (seg.in||0)), 0);
+    r.percent = matchDuration > 0 ? r.minutes / matchDuration : 0;
+  });
+  return result;
+}
+
+function playerSeasonMinutes(matches, pid) {
+  const done = (matches||[]).filter(m => m.status === 'done');
+  let total = 0;
+  let played = 0;
+  let matchesPlayed = 0;
+  done.forEach(m => {
+    const pt = computePlayingTimes(m, []);
+    const r = pt[pid];
+    if (r && r.minutes > 0) {
+      played += r.minutes;
+      matchesPlayed++;
+    }
+    total += (m.duration || 60);
+  });
+  return { totalAvailable: total, played, matchesPlayed, totalMatches: done.length, percent: total>0 ? played/total : 0 };
+}
 
 
 /* ============================================================
@@ -3359,7 +3468,7 @@ function ExercisesLibrary({ onBack, T }) {
 /* ============================================================
    MATCH PAGE
 ============================================================ */
-function MatchPage({ matches, setMatches, players, T, showToast }) {
+function MatchPage({ matches, setMatches, players, matchPresets, setMatchPresets, T, showToast }) {
   const [view, setView] = useState('list'); // list | edit | live | recap
   const [editing, setEditing] = useState(null);
   const [recapMatch, setRecapMatch] = useState(null);
@@ -3447,6 +3556,8 @@ function MatchPage({ matches, setMatches, players, T, showToast }) {
       onDelete={()=>setConfirmDelete(editing)}
       onLive={()=>{ saveMatch(); startLive(editing); }}
       players={players} T={T}
+      matchPresets={matchPresets} setMatchPresets={setMatchPresets}
+      showToast={showToast}
       confirmDelete={confirmDelete} setConfirmDelete={setConfirmDelete} deleteMatch={deleteMatch}/>;
   }
 
@@ -3598,7 +3709,7 @@ function MatchListCard({ match: m, players, T, onClick, onLive }) {
 /* ====================================================
    MATCH EDITOR (préparation)
 ============================================================ */
-function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, players, T, confirmDelete, setConfirmDelete, deleteMatch }) {
+function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, players, T, matchPresets, setMatchPresets, showToast, confirmDelete, setConfirmDelete, deleteMatch }) {
   const [tab, setTab] = useState(0);
   const [selectedPid, setSelectedPid] = useState(null); // joueur sélectionné pour placement
 
@@ -3731,40 +3842,125 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
       <Tabs tabs={['Infos','Composition','Notes']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
 
       {tab === 0 && (
-        <Card padding={18}>
-          <SectionTitle>Détails du match</SectionTitle>
-          <div style={{ display:'grid', gap:14 }}>
-            <Input label="Adversaire" value={match.opponent} onChange={v=>setMatch({...match, opponent:v})} placeholder="RSC Anderlecht U12"/>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:12 }}>
-              <Input label="Date" type="date" value={match.date} onChange={v=>setMatch({...match, date:v})}/>
-              <Input label="Heure" type="time" value={match.time} onChange={v=>setMatch({...match, time:v})}/>
-              <Select label="Type" value={match.type} onChange={v=>setMatch({...match, type:v})}
-                options={MATCH_TYPES.map(t=>({value:t.id,label:t.label,dot:true,color:t.color}))} placeholder=""/>
-              <Select label="Durée" value={String(match.duration)} onChange={v=>setMatch({...match, duration:Number(v)})}
-                options={MATCH_DURATIONS.map(d=>({value:String(d.id),label:d.label}))} placeholder=""/>
+        <div style={{ display:'grid', gap:14 }}>
+          {/* Bloc 1: MATCH */}
+          <Card padding={18}>
+            <SectionTitle>Match</SectionTitle>
+            <div style={{ display:'grid', gap:14 }}>
+              <Input label="Adversaire" value={match.opponent} onChange={v=>setMatch({...match, opponent:v})}
+                icon="users" placeholder="RSC Anderlecht U12"/>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))', gap:12 }}>
+                <Select label="Type" value={match.type} onChange={v=>setMatch({...match, type:v})}
+                  options={MATCH_TYPES.map(t=>({value:t.id,label:t.label,dot:true,color:t.color}))} placeholder=""/>
+                <Select label="Durée totale" value={String(match.duration)} onChange={v=>setMatch({...match, duration:Number(v)})}
+                  options={MATCH_DURATIONS.map(d=>({value:String(d.id),label:d.label}))} placeholder=""/>
+                <Select label="Formation tactique" value={match.formation} onChange={v=>setMatch({...match, formation:v})}
+                  options={FORMATIONS_8V8.map(f=>({value:f.id, label:f.label, sub:f.desc}))} placeholder=""/>
+              </div>
             </div>
+          </Card>
+
+          {/* Bloc 2: HORAIRES */}
+          <Card padding={18}>
+            <SectionTitle>Horaires</SectionTitle>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:12 }}>
+              <Input label="Date du match" type="date" value={match.date} onChange={v=>setMatch({...match, date:v})}/>
+              <Input label="Coup d'envoi" type="time" value={match.time} onChange={v=>setMatch({...match, time:v})}/>
+              <Input label="Rendez-vous équipe" type="time" value={match.arrivalTime}
+                onChange={v=>setMatch({...match, arrivalTime:v})}
+                suffix={match.time && match.arrivalTime ? `(${(() => {
+                  const [h,m] = match.time.split(':').map(Number);
+                  const [ah,am] = match.arrivalTime.split(':').map(Number);
+                  const diff = (h*60+m) - (ah*60+am);
+                  return diff > 0 ? `${Math.floor(diff/60)}h${String(diff%60).padStart(2,'0')} avant` : '';
+                })()})` : ''}/>
+            </div>
+            <div style={{ marginTop:12 }}>
+              <Input label="Lieu de RDV (si différent du terrain)" value={match.meetingPoint}
+                onChange={v=>setMatch({...match, meetingPoint:v})}
+                icon="pin" placeholder="Parking du stade, vestiaire..."/>
+            </div>
+          </Card>
+
+          {/* Bloc 3: LIEU */}
+          <Card padding={18}>
+            <SectionTitle>Lieu</SectionTitle>
+            <div style={{ display:'grid', gap:12 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+                <Select label="Domicile / Extérieur" value={match.domicile?'home':'away'}
+                  onChange={v=>setMatch({...match, domicile:v==='home'})}
+                  options={[{value:'home',label:'Domicile',icon:'home'},{value:'away',label:'Extérieur',icon:'pin'}]} placeholder=""/>
+                {match.domicile ? (
+                  <Select label="Terrain" value={match.location} onChange={v=>setMatch({...match, location:v})}
+                    options={[{value:'',label:'Non défini'}, ...LOCATIONS.map(l=>({ value:l, label:l, icon:'pin' }))]} placeholder=""/>
+                ) : (
+                  <Input label="Stade / Lieu" value={match.location}
+                    onChange={v=>setMatch({...match, location:v})}
+                    icon="pin" placeholder="Stade Vincent Van Den Eeden"/>
+                )}
+              </div>
+              <Input label="Adresse complète" value={match.address}
+                onChange={v=>setMatch({...match, address:v})}
+                icon="pin" placeholder="Rue de la Vallée 28, 1180 Uccle"/>
+            </div>
+          </Card>
+
+          {/* Bloc 4: ÉQUIPEMENT & ARBITRE */}
+          <Card padding={18}>
+            <SectionTitle>Équipement & arbitre</SectionTitle>
+            <div style={{ display:'grid', gap:12 }}>
+              <Select label="Maillot à porter" value={match.kitColor || 'home'}
+                onChange={v=>setMatch({...match, kitColor:v})}
+                options={KIT_COLORS.map(k=>({value:k.id, label:k.label, dot:true, color:k.color}))} placeholder=""/>
+              <Input label="Arbitre prévu" value={match.referee}
+                onChange={v=>setMatch({...match, referee:v})}
+                placeholder="Nom de l'arbitre (si connu)"/>
+              <Select label="Météo prévue" value={match.weather}
+                onChange={v=>setMatch({...match, weather:v})}
+                options={[{value:'',label:'Non renseignée'}, ...WEATHER_OPTIONS.map(w=>({value:w.id, label:w.label, icon:w.icon}))]} placeholder=""/>
+            </div>
+          </Card>
+
+          {/* Bloc 5: CONTACT */}
+          <Card padding={18}>
+            <SectionTitle>Contact</SectionTitle>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-              <Select label="Lieu" value={match.location} onChange={v=>setMatch({...match, location:v})}
-                options={[{value:'',label:'Non défini'}, ...LOCATIONS.map(l=>({ value:l, label:l, icon:'pin' }))]} placeholder=""/>
-              <Select label="Domicile / Extérieur" value={match.domicile?'home':'away'} onChange={v=>setMatch({...match, domicile:v==='home'})}
-                options={[{value:'home',label:'Domicile',icon:'home'},{value:'away',label:'Extérieur',icon:'pin'}]} placeholder=""/>
+              <Input label="Nom du contact" value={match.contactName}
+                onChange={v=>setMatch({...match, contactName:v})}
+                icon="user" placeholder="Responsable terrain, dirigeant..."/>
+              <Input label="Téléphone" value={match.contactPhone}
+                onChange={v=>setMatch({...match, contactPhone:v})}
+                type="tel" placeholder="+32 ..."/>
             </div>
-            <Select label="Formation tactique" value={match.formation} onChange={v=>setMatch({...match, formation:v})}
-              options={FORMATIONS_8V8.map(f=>({value:f.id, label:f.label, sub:f.desc}))} placeholder=""/>
-          </div>
-        </Card>
+          </Card>
+
+          {/* Bloc 6: TRANSPORT & INSTRUCTIONS */}
+          <Card padding={18}>
+            <SectionTitle>Transport & instructions</SectionTitle>
+            <div style={{ display:'grid', gap:12 }}>
+              <Textarea label="Transport / Co-voiturage" value={match.transport}
+                onChange={v=>setMatch({...match, transport:v})} rows={2}
+                placeholder="Bus du club à 13h, co-voiturage parents..."/>
+              <Textarea label="Instructions spéciales" value={match.specialInstructions}
+                onChange={v=>setMatch({...match, specialInstructions:v})} rows={3}
+                placeholder="Équipement particulier, allergies, médicaments, etc."/>
+            </div>
+          </Card>
+        </div>
       )}
 
       {tab === 1 && (
         <CompositionView
-          match={match} lineup={lineup} form={form} players={players} T={T}
+          match={match} setMatch={setMatch} lineup={lineup} form={form} players={players} T={T}
           available={available} benchPlayers={benchPlayers} absentPlayers={absentPlayers}
           lineupCount={lineupCount}
           selectedPid={selectedPid} setSelectedPid={selectPlayer}
           slotClick={slotClick}
           sendToBench={sendToBench} sendToAbsent={sendToAbsent} sendToAvailable={sendToAvailable}
           clearAll={clearAll} doAutoCompose={doAutoCompose}
-          onFormationChange={(f)=>setMatch({...match, formation:f})}/>
+          onFormationChange={(f)=>setMatch({...match, formation:f})}
+          matchPresets={matchPresets} setMatchPresets={setMatchPresets}
+          showToast={showToast}/>
       )}
 
       {tab === 2 && (
@@ -3791,7 +3987,11 @@ function MatchEditor({ match, setMatch, onSave, onCancel, onDelete, onLive, play
 /* ============================================================
    COMPOSITION VIEW (tap-to-place tablet-friendly)
 ============================================================ */
-function CompositionView({ match, lineup, form, players, T, available, benchPlayers, absentPlayers, lineupCount, selectedPid, setSelectedPid, slotClick, sendToBench, sendToAbsent, sendToAvailable, clearAll, doAutoCompose, onFormationChange }) {
+function CompositionView({ match, setMatch, lineup, form, players, T, available, benchPlayers, absentPlayers, lineupCount, selectedPid, setSelectedPid, slotClick, sendToBench, sendToAbsent, sendToAvailable, clearAll, doAutoCompose, onFormationChange, matchPresets, setMatchPresets, showToast }) {
+  const [presetModal, setPresetModal] = useState(false);
+  const [saveModal, setSaveModal] = useState(false);
+  const [presetName, setPresetName] = useState('');
+
   const selectedPlayer = selectedPid ? players.find(p => p.id === selectedPid) : null;
   const selectedLocation = selectedPid
     ? (lineup.includes(selectedPid) ? 'lineup'
@@ -3799,6 +3999,42 @@ function CompositionView({ match, lineup, form, players, T, available, benchPlay
       : match.absent.includes(selectedPid) ? 'absent'
       : 'available')
     : null;
+
+  function saveCurrentAsPreset() {
+    if (!presetName.trim()) return;
+    const preset = {
+      id: uid(),
+      name: presetName.trim(),
+      formation: match.formation,
+      lineup: [...lineup], // copy sparse array of pids
+      bench: [...(match.bench||[])],
+      createdAt: nowMs(),
+    };
+    setMatchPresets([...(matchPresets||[]), preset]);
+    setSaveModal(false);
+    setPresetName('');
+    showToast && showToast(`Compo "${preset.name}" sauvegardée`, 'success');
+  }
+  function applyPreset(preset) {
+    // Filter pids that still exist in players list
+    const validPids = new Set(players.map(p => p.id));
+    const newLineup = (preset.lineup || []).map(pid => validPids.has(pid) ? pid : null);
+    const newBench = (preset.bench || []).filter(pid => validPids.has(pid));
+    // Adjust to current formation length if different
+    const targetForm = getFormation(preset.formation);
+    const sameFormation = preset.formation === match.formation;
+    if (sameFormation) {
+      setMatch({ ...match, lineup: newLineup, bench: newBench, absent: [] });
+    } else {
+      // change formation too
+      setMatch({ ...match, formation: preset.formation, lineup: newLineup, bench: newBench, absent: [] });
+    }
+    setPresetModal(false);
+    showToast && showToast(`Compo "${preset.name}" appliquée`, 'success');
+  }
+  function deletePreset(presetId) {
+    setMatchPresets((matchPresets||[]).filter(p => p.id !== presetId));
+  }
 
   return (
     <div>
@@ -3812,12 +4048,79 @@ function CompositionView({ match, lineup, form, players, T, available, benchPlay
             <Badge bg={T.card3} color={T.text2}>{match.bench.length} banc</Badge>
             <Badge bg={T.card3} color={T.text2}>{match.absent.length} absent(s)</Badge>
           </div>
-          <div style={{ display:'flex', gap:6 }}>
-            <Btn size="sm" variant="secondary" icon="refresh" onClick={doAutoCompose} title="Compose automatiquement selon les postes">Auto-compo</Btn>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            <Btn size="sm" variant="primary" icon="bookOpen" onClick={()=>setPresetModal(true)} title="Charger une compo préfaite">
+              Charger ({(matchPresets||[]).length})
+            </Btn>
+            <Btn size="sm" variant="secondary" icon="star" onClick={()=>{ setPresetName(''); setSaveModal(true); }}
+              disabled={lineupCount===0} title="Sauvegarder la compo actuelle">Sauver</Btn>
+            <Btn size="sm" variant="secondary" icon="refresh" onClick={doAutoCompose} title="Compose automatiquement selon les postes">Auto</Btn>
             <Btn size="sm" variant="ghost" icon="close" onClick={clearAll} title="Vider tous les titulaires">Vider</Btn>
           </div>
         </div>
       </Card>
+
+      {/* PRESETS MODAL */}
+      <Modal open={presetModal} onClose={()=>setPresetModal(false)} title="Compositions sauvegardées" width={520}
+        footer={<Btn variant="primary" onClick={()=>setPresetModal(false)}>Fermer</Btn>}>
+        {(matchPresets||[]).length === 0 ? (
+          <EmptyState icon="bookOpen" title="Aucune compo sauvegardée"
+            message="Crée une compo puis utilise le bouton « Sauver » pour la réutiliser sur d'autres matchs."/>
+        ) : (
+          <div style={{ display:'grid', gap:8 }}>
+            {(matchPresets||[]).map(preset => {
+              const presetLineupCount = (preset.lineup||[]).filter(Boolean).length;
+              const validPids = new Set(players.map(p => p.id));
+              const missingCount = (preset.lineup||[]).filter(pid => pid && !validPids.has(pid)).length;
+              return (
+                <div key={preset.id} style={{
+                  padding:'12px 14px', background:T.card2, borderRadius:10,
+                  border:`1px solid ${T.border}`,
+                  display:'flex', alignItems:'center', gap:10,
+                }}>
+                  <div style={{
+                    width:42, height:42, borderRadius:10,
+                    background:T.accent+'18', color:T.accent,
+                    display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                  }}><Icon name="bookOpen" size={20}/></div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{preset.name}</div>
+                    <div style={{ fontSize:11, color:T.text2, marginTop:2 }}>
+                      Formation {preset.formation} · {presetLineupCount}/8 titulaires · {(preset.bench||[]).length} banc
+                      {missingCount > 0 && <span style={{ color:T.warning }}> · ⚠ {missingCount} joueur(s) manquant(s)</span>}
+                    </div>
+                  </div>
+                  <Btn size="sm" variant="primary" icon="check" onClick={()=>applyPreset(preset)}>Charger</Btn>
+                  <IconBtn icon="trash" size={32} variant="danger"
+                    onClick={()=>{
+                      if (confirm(`Supprimer la compo "${preset.name}" ?`)) deletePreset(preset.id);
+                    }}/>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
+
+      {/* SAVE PRESET MODAL */}
+      <Modal open={saveModal} onClose={()=>setSaveModal(false)} title="Sauvegarder cette composition" width={460}
+        footer={<>
+          <Btn variant="ghost" onClick={()=>setSaveModal(false)}>Annuler</Btn>
+          <Btn variant="primary" icon="check" onClick={saveCurrentAsPreset} disabled={!presetName.trim()}>Sauvegarder</Btn>
+        </>}>
+        <div style={{ display:'grid', gap:14 }}>
+          <Input label="Nom de la compo" value={presetName} onChange={setPresetName}
+            placeholder="Ex: Compo championnat, Compo défensive..." autoFocus icon="star"/>
+          <div style={{ padding:12, background:T.card2, borderRadius:9, border:`1px solid ${T.border}` }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', marginBottom:6 }}>Aperçu</div>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              <Badge bg={T.accentLight} color={T.accent}>Formation {match.formation}</Badge>
+              <Badge bg={T.success+'18'} color={T.success}>{lineupCount} titulaires</Badge>
+              <Badge bg={T.warningLight} color={T.warning}>{(match.bench||[]).length} banc</Badge>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {/* SELECTED PLAYER BANNER */}
       {selectedPlayer && (
@@ -3941,28 +4244,53 @@ function PlayerListSection({ title, subtitle, icon, players, T, colorKey, select
 /* ============================================================
    INTERACTIVE FIELD (tap-to-place)
 ============================================================ */
-function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick }) {
+function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, compact=false }) {
+  /* HORIZONTAL field — own goal LEFT, attack RIGHT */
   return (
     <div style={{
       position:'relative', width:'100%',
-      paddingBottom:'135%', maxWidth:440, margin:'0 auto',
-      background:'linear-gradient(180deg, #0a5d2e 0%, #0e7a3f 100%)',
-      borderRadius:14, overflow:'hidden',
+      paddingBottom: compact ? '52%' : '60%',
+      maxWidth: compact ? 520 : 640, margin:'0 auto',
+      background:'linear-gradient(90deg, #0a5d2e 0%, #0e7a3f 50%, #0a5d2e 100%)',
+      borderRadius:12, overflow:'hidden',
       boxShadow: T.shadowMd,
       userSelect:'none', WebkitTapHighlightColor:'transparent',
     }}>
+      {/* Field markings - horizontal layout */}
       <div style={{ position:'absolute', inset:0 }}>
-        <svg viewBox="0 0 100 140" width="100%" height="100%" preserveAspectRatio="none">
-          <rect x="2" y="2" width="96" height="136" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <line x1="2" y1="70" x2="98" y2="70" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <circle cx="50" cy="70" r="9" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <circle cx="50" cy="70" r="0.7" fill="rgba(255,255,255,0.5)"/>
-          <rect x="30" y="2" width="40" height="14" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <rect x="40" y="2" width="20" height="5" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <rect x="30" y="124" width="40" height="14" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
-          <rect x="40" y="133" width="20" height="5" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="0.6"/>
+        <svg viewBox="0 0 100 60" width="100%" height="100%" preserveAspectRatio="none">
+          {/* outer border */}
+          <rect x="1.5" y="1.5" width="97" height="57" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          {/* halfway line */}
+          <line x1="50" y1="1.5" x2="50" y2="58.5" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          {/* center circle */}
+          <circle cx="50" cy="30" r="7" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          <circle cx="50" cy="30" r="0.7" fill="rgba(255,255,255,0.55)"/>
+          {/* Left penalty box */}
+          <rect x="1.5" y="18" width="12" height="24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          <rect x="1.5" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          {/* Left goal */}
+          <rect x="0.3" y="26" width="1.2" height="8" fill="rgba(255,255,255,0.25)"/>
+          {/* Right penalty box */}
+          <rect x="86.5" y="18" width="12" height="24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          <rect x="94.5" y="24" width="4" height="12" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth="0.4"/>
+          {/* Right goal */}
+          <rect x="98.5" y="26" width="1.2" height="8" fill="rgba(255,255,255,0.25)"/>
         </svg>
       </div>
+      {/* Direction arrow + labels */}
+      <div style={{
+        position:'absolute', top:6, left:'50%', transform:'translateX(-50%)',
+        fontSize:9, fontWeight:700, color:'rgba(255,255,255,0.7)',
+        letterSpacing:1, textTransform:'uppercase',
+        display:'flex', alignItems:'center', gap:6,
+        textShadow:'0 1px 2px rgba(0,0,0,0.5)', pointerEvents:'none',
+      }}>
+        <span>RLFC</span>
+        <span style={{ opacity:0.5 }}>→</span>
+        <span>ATTAQUE</span>
+      </div>
+
       {form.slots.map((slot, i) => {
         const pid = lineup[i];
         const player = pid ? players.find(p => p.id === pid) : null;
@@ -3970,35 +4298,37 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick }
         const isSelected = pid && pid === selectedPid;
         const isEmpty = !player;
         const showPulse = selectedPid && isEmpty;
+        const size = compact ? 36 : 44;
         return (
-          <button key={i} onClick={()=>onSlotClick(i)}
+          <button key={i} onClick={()=>onSlotClick && onSlotClick(i)}
             className={showPulse ? 'pulse' : ''}
             style={{
               position:'absolute', left:`${slot.x}%`, top:`${slot.y}%`,
               transform:'translate(-50%,-50%)',
-              background:'transparent', border:'none', padding:0, cursor:'pointer',
-              textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+              background:'transparent', border:'none', padding:0,
+              cursor: onSlotClick ? 'pointer' : 'default',
+              textAlign:'center', display:'flex', flexDirection:'column', alignItems:'center', gap:1,
             }}>
             <div style={{
-              width:48, height:48, borderRadius:'50%',
+              width:size, height:size, borderRadius:'50%',
               background: player ? (isSelected ? T.accent : '#fff') : 'rgba(255,255,255,0.18)',
               border:`2.5px solid ${isSelected ? T.accent : (pos?.color || '#fff')}`,
               display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize:14, fontWeight:800,
+              fontSize: compact ? 12 : 14, fontWeight:800,
               color: player ? (isSelected ? '#fff' : '#1C1C1E') : 'rgba(255,255,255,0.7)',
               boxShadow: isSelected ? `0 0 0 4px ${T.accent}40, 0 2px 8px rgba(0,0,0,0.4)` : '0 2px 8px rgba(0,0,0,0.3)',
               transition:'all 0.2s',
             }}>
               {player ? (player.number || (player.firstName?.[0]||'?')) : (
-                <Icon name="plus" size={18} color="rgba(255,255,255,0.5)"/>
+                <Icon name="plus" size={compact?14:16} color="rgba(255,255,255,0.5)"/>
               )}
             </div>
             <div style={{
-              fontSize: player ? 10 : 9, fontWeight:700, color:'#fff', marginTop:1,
+              fontSize: compact ? 8.5 : 9.5, fontWeight:700, color:'#fff', marginTop:2,
               textShadow:'0 1px 2px rgba(0,0,0,0.8)',
-              whiteSpace:'nowrap', maxWidth:70, overflow:'hidden', textOverflow:'ellipsis',
+              whiteSpace:'nowrap', maxWidth: compact?60:72, overflow:'hidden', textOverflow:'ellipsis',
               padding:'1px 5px', borderRadius:4,
-              background: player ? 'transparent' : 'rgba(0,0,0,0.35)',
+              background: player ? 'transparent' : 'rgba(0,0,0,0.4)',
             }}>{player ? (player.lastName || player.firstName) : pos?.short || slot.pos}</div>
           </button>
         );
@@ -4013,8 +4343,9 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
   const [half, setHalf] = useState(1);
   const intervalRef = useRef(null);
   const [eventModal, setEventModal] = useState(false);
-  const [eventDraft, setEventDraft] = useState({ type:'goal', playerId:'', minute:0, note:'' });
+  const [eventDraft, setEventDraft] = useState({ type:'goal', playerId:'', playerOutId:'', playerInId:'', minute:0, note:'' });
   const [showLineup, setShowLineup] = useState(false);
+  const [showPlayTime, setShowPlayTime] = useState(false);
 
   useEffect(() => {
     if (running) {
@@ -4032,7 +4363,7 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
   const totalProgress = Math.min((elapsedTotal / totalDurationS) * 100, 100);
 
   function addEvent(type) {
-    setEventDraft({ type: type || 'goal', playerId:'', minute, note:'' });
+    setEventDraft({ type: type || 'goal', playerId:'', playerOutId:'', playerInId:'', minute, note:'' });
     setEventModal(true);
   }
   function saveEvent() {
@@ -4040,7 +4371,26 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
     let newScore = { ...match.score };
     if (ev.type === 'goal') newScore.us++;
     else if (ev.type === 'goal_against') newScore.them++;
-    setMatch({ ...match, events:[...match.events, ev], score:newScore });
+
+    let newLineup = ensureLineupArray(match);
+    let newBench = [...(match.bench||[])];
+
+    // Pour une substitution: appliquer le changement de composition LIVE
+    if (ev.type === 'substitution' || ev.type === 'sub') {
+      ev.type = 'substitution'; // normaliser
+      if (ev.playerOutId && ev.playerInId) {
+        const idx = newLineup.findIndex(p => p === ev.playerOutId);
+        if (idx >= 0) {
+          newLineup[idx] = ev.playerInId;
+          // sortant va au banc
+          if (!newBench.includes(ev.playerOutId)) newBench.push(ev.playerOutId);
+          // entrant retiré du banc
+          newBench = newBench.filter(p => p !== ev.playerInId);
+        }
+      }
+    }
+
+    setMatch({ ...match, events:[...match.events, ev], score:newScore, lineup:newLineup, bench:newBench });
     setEventModal(false);
   }
   function removeEvent(eid) {
@@ -4143,7 +4493,7 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
             <QuickEventBtn type="goal" T={T} onClick={()=>addEvent('goal')}/>
             <QuickEventBtn type="goal_against" T={T} onClick={()=>addEvent('goal_against')}/>
             <QuickEventBtn type="yellow" T={T} onClick={()=>addEvent('yellow')}/>
-            <QuickEventBtn type="sub" T={T} onClick={()=>addEvent('sub')}/>
+            <QuickEventBtn type="substitution" T={T} onClick={()=>addEvent('substitution')}/>
           </div>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:6, marginTop:6 }}>
             <QuickEventBtn type="assist" T={T} onClick={()=>addEvent('assist')}/>
@@ -4193,6 +4543,32 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
           )}
         </Card>
 
+        {/* PLAYING TIME (ACFF) — toggle */}
+        <Card padding={12} style={{ marginBottom:14 }}>
+          <button onClick={()=>setShowPlayTime(s=>!s)}
+            style={{
+              width:'100%', display:'flex', alignItems:'center', gap:10,
+              padding:'4px 6px', background:'transparent',
+              cursor:'pointer', textAlign:'left',
+            }}>
+            <div style={{
+              width:30, height:30, borderRadius:8,
+              background:T.info+'1F', color:T.info,
+              display:'flex', alignItems:'center', justifyContent:'center',
+            }}><Icon name="clock" size={16}/></div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text }}>Temps de jeu (ACFF)</div>
+              <div style={{ fontSize:11, color:T.text2 }}>Conformité U12 · 50% mini</div>
+            </div>
+            <Icon name={showPlayTime?'chevronUp':'chevronDown'} size={16} color={T.text2}/>
+          </button>
+          {showPlayTime && (
+            <div className="slide-down" style={{ marginTop:12 }}>
+              <PlayingTimeTable match={match} players={players} T={T} liveMinute={minute}/>
+            </div>
+          )}
+        </Card>
+
         {/* EVENTS TIMELINE */}
         <Card padding={14} style={{ marginBottom:14 }}>
           <SectionTitle>Événements ({match.events.length})</SectionTitle>
@@ -4203,6 +4579,9 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
               {[...match.events].sort((a,b)=>(b.minute||0)-(a.minute||0)).map(ev => {
                 const et = EVENT_TYPES.find(t=>t.id===ev.type);
                 const player = players.find(p=>p.id===ev.playerId);
+                const playerOut = ev.playerOutId ? players.find(p=>p.id===ev.playerOutId) : null;
+                const playerIn = ev.playerInId ? players.find(p=>p.id===ev.playerInId) : null;
+                const isSub = ev.type === 'substitution' || ev.type === 'sub';
                 return (
                   <div key={ev.id} style={{
                     display:'flex', alignItems:'center', gap:10,
@@ -4217,7 +4596,13 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
                     }}><Icon name={et.icon} size={16}/></div>
                     <div style={{ flex:1, minWidth:0 }}>
                       <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
-                        {et.label}{player ? <> · {player.firstName} {player.lastName?player.lastName[0]+'.':''}</> : ''}
+                        {isSub && (playerOut || playerIn) ? (
+                          <span style={{ display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                            {playerOut && <span style={{ color:T.danger }}>↓ {playerOut.firstName} {playerOut.lastName?playerOut.lastName[0]+'.':''}</span>}
+                            {playerOut && playerIn && <span style={{ color:T.text3 }}>→</span>}
+                            {playerIn && <span style={{ color:T.success }}>↑ {playerIn.firstName} {playerIn.lastName?playerIn.lastName[0]+'.':''}</span>}
+                          </span>
+                        ) : <>{et.label}{player ? <> · {player.firstName} {player.lastName?player.lastName[0]+'.':''}</> : ''}</>}
                       </div>
                       <div style={{ fontSize:11, color:T.text2 }}>{ev.minute}'{ev.note?` · ${ev.note}`:''}</div>
                     </div>
@@ -4262,12 +4647,28 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
                 ))}
               </div>
             </div>
-            {/* Player selector only for events that involve a player */}
-            {eventDraft.type !== 'goal_against' && (
+            {/* SUBSTITUTION: 2 selects */}
+            {eventDraft.type === 'substitution' ? (
+              <>
+                <Select label="Joueur qui SORT (terrain → banc)" value={eventDraft.playerOutId}
+                  onChange={v=>setEventDraft({...eventDraft, playerOutId:v})}
+                  options={[{value:'',label:'Choisir le sortant...'}, ...lineupPlayers.map(p=>({value:p.id, label:`#${p.number||'?'} ${p.firstName} ${p.lastName}`, icon:'arrowDown', color:T.danger}))]}
+                  placeholder=""/>
+                <Select label="Joueur qui ENTRE (banc → terrain)" value={eventDraft.playerInId}
+                  onChange={v=>setEventDraft({...eventDraft, playerInId:v})}
+                  options={[{value:'',label:'Choisir l\'entrant...'}, ...benchPlayers.map(p=>({value:p.id, label:`#${p.number||'?'} ${p.firstName} ${p.lastName}`, icon:'arrowUp', color:T.success}))]}
+                  placeholder=""/>
+                {benchPlayers.length === 0 && (
+                  <div style={{ padding:10, background:T.warningLight, color:T.warning, borderRadius:8, fontSize:12, fontWeight:600 }}>
+                    Aucun remplaçant disponible sur le banc
+                  </div>
+                )}
+              </>
+            ) : eventDraft.type !== 'goal_against' ? (
               <Select label="Joueur" value={eventDraft.playerId} onChange={v=>setEventDraft({...eventDraft, playerId:v})}
                 options={[{value:'',label:'Aucun joueur'}, ...allEligible.map(p=>({value:p.id, label:`#${p.number||'?'} ${p.firstName} ${p.lastName}`}))]}
                 placeholder=""/>
-            )}
+            ) : null}
             <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:10 }}>
               <Input label="Minute" type="number" value={eventDraft.minute} onChange={v=>setEventDraft({...eventDraft, minute:v})}/>
               <Input label="Note" value={eventDraft.note} onChange={v=>setEventDraft({...eventDraft, note:v})} placeholder="Ex: superbe action..."/>
@@ -4275,6 +4676,103 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
           </div>
         </Modal>
       </PageContainer>
+    </div>
+  );
+}
+
+/* ============================================================
+   PLAYING TIME TABLE (réutilisé Live + Recap)
+   liveMinute: si fourni, considère que le match est en cours à cette minute
+============================================================ */
+function PlayingTimeTable({ match, players, T, liveMinute=null }) {
+  // Compute with current state. If live, we artificially cap match.duration to liveMinute for the calculation.
+  const effectiveMatch = useMemo(() => {
+    if (liveMinute === null) return match;
+    return { ...match, duration: Math.max(1, liveMinute) };
+  }, [match, liveMinute]);
+
+  const times = useMemo(() => computePlayingTimes(effectiveMatch, players), [effectiveMatch, players]);
+  const matchDuration = effectiveMatch.duration || 60;
+  const acffMin = matchDuration * 0.5; // 50% obligatoire ACFF U12
+
+  // Liste tous les joueurs concernés (lineup actuel + bench + absent + sub_in via events)
+  const concernedPids = useMemo(() => {
+    const s = new Set();
+    ensureLineupArray(match).filter(Boolean).forEach(pid => s.add(pid));
+    (match.bench||[]).forEach(pid => s.add(pid));
+    (match.absent||[]).forEach(pid => s.add(pid));
+    (match.events||[]).forEach(ev => {
+      if (ev.playerOutId) s.add(ev.playerOutId);
+      if (ev.playerInId) s.add(ev.playerInId);
+    });
+    return Array.from(s);
+  }, [match]);
+
+  const rows = concernedPids
+    .map(pid => ({ player: players.find(p => p.id === pid), time: times[pid] || { minutes:0, status:'absent' } }))
+    .filter(r => r.player)
+    .sort((a,b) => b.time.minutes - a.time.minutes);
+
+  if (rows.length === 0) {
+    return <EmptyState icon="clock" title="Aucune donnée" message="Aucun joueur dans cette compo"/>;
+  }
+
+  return (
+    <div>
+      {liveMinute !== null && (
+        <div style={{ padding:'8px 12px', background:T.infoLight, color:T.info, borderRadius:8, fontSize:11, fontWeight:600, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
+          <Icon name="info" size={12}/>
+          Calcul live à la minute <strong>{liveMinute}'</strong> · ACFF mini : {Math.round(acffMin)} min (50% de {matchDuration})
+        </div>
+      )}
+      <div style={{ display:'grid', gap:5 }}>
+        {rows.map(({ player, time }) => {
+          const pos = POSITIONS.find(x => x.id === player.position);
+          const isAbsent = (match.absent||[]).includes(player.id);
+          const belowAcff = !isAbsent && time.minutes < acffMin && (liveMinute===null);
+          const minColor = isAbsent ? T.text3
+            : time.minutes === 0 ? T.text3
+            : time.minutes >= acffMin ? T.success
+            : T.warning;
+          const statusLabel =
+            isAbsent ? 'Absent'
+            : time.status === 'starter' ? (time.outAt === matchDuration ? 'Titulaire' : 'Titulaire (sorti)')
+            : time.status === 'sub_in' ? 'Entré en cours'
+            : time.minutes > 0 ? 'A joué'
+            : 'Banc';
+          const pct = matchDuration > 0 ? Math.min(100, (time.minutes / matchDuration) * 100) : 0;
+          return (
+            <div key={player.id} style={{
+              padding:'8px 10px', background:T.card2, borderRadius:9,
+              border:`1px solid ${belowAcff ? T.danger+'40' : T.border}`,
+              display:'flex', alignItems:'center', gap:9,
+            }}>
+              <Avatar name={`${player.firstName} ${player.lastName}`} size={28} color={pos?.color}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                  #{player.number||'?'} {player.firstName} {player.lastName}
+                </div>
+                <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:3 }}>
+                  <div style={{ flex:1, height:4, borderRadius:2, background:T.card3, overflow:'hidden' }}>
+                    <div style={{ width:`${pct}%`, height:'100%', background:minColor, transition:'width 0.3s' }}/>
+                  </div>
+                  <span style={{ fontSize:10, color:T.text2, fontWeight:600 }}>{statusLabel}</span>
+                </div>
+              </div>
+              <div style={{
+                minWidth:60, textAlign:'right',
+                fontSize:14, fontWeight:800, color:minColor,
+                fontVariantNumeric:'tabular-nums',
+              }}>
+                {time.minutes}'<span style={{ fontSize:10, color:T.text3 }}>/{matchDuration}</span>
+              </div>
+              {belowAcff && !isAbsent && (
+                <Icon name="alert" size={14} color={T.danger} title={`Sous le seuil ACFF (${Math.round(acffMin)} min)`}/>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -4531,6 +5029,17 @@ function MatchRecap({ match, players, T, onBack, onEdit, onDelete, confirmDelete
           </div>
         </Card>
       )}
+
+      {/* PLAYING TIME - ACFF compliance */}
+      <Card padding={18} style={{ marginBottom:14 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, flexWrap:'wrap', gap:8 }}>
+          <SectionTitle style={{ marginBottom:0 }}>Temps de jeu (ACFF)</SectionTitle>
+          <Badge bg={T.info+'18'} color={T.info}>
+            <Icon name="info" size={10}/> Seuil 50% = {Math.round(match.duration*0.5)} min
+          </Badge>
+        </div>
+        <PlayingTimeTable match={match} players={players} T={T}/>
+      </Card>
 
       {/* PLAYER STATS */}
       {Object.keys(playerStats).length > 0 && (
@@ -5493,6 +6002,7 @@ function App() {
   const [players, setPlayers] = usePersist('players', []);
   const [sessions, setSessions] = usePersist('sessions', []);
   const [matches, setMatches] = usePersist('matches', []);
+  const [matchPresets, setMatchPresets] = usePersist('matchPresets', []);
   const [evals, setEvals] = usePersist('evals', {});
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState({ message:'', type:'info' });
@@ -5536,7 +6046,9 @@ function App() {
           {tab === 'home' && <Dashboard players={players} sessions={sessions} matches={matches} evals={evals} goto={setTab} T={T}/>}
           {tab === 'seances' && <SeancesPage sessions={sessions} setSessions={setSessions} players={players} T={T} showToast={showToast}/>}
           {tab === 'groupe' && <GroupePage players={players} setPlayers={setPlayers} evals={evals} T={T}/>}
-          {tab === 'match' && <MatchPage matches={matches} setMatches={setMatches} players={players} T={T} showToast={showToast}/>}
+          {tab === 'match' && <MatchPage matches={matches} setMatches={setMatches} players={players}
+            matchPresets={matchPresets} setMatchPresets={setMatchPresets}
+            T={T} showToast={showToast}/>}
           {tab === 'suivi' && <SuiviPage players={players} evals={evals} setEvals={setEvals} matches={matches} sessions={sessions} T={T} showToast={showToast}/>}
           {tab === 'saison' && <SaisonPage players={players} matches={matches} sessions={sessions} evals={evals} T={T} showToast={showToast}/>}
         </main>
