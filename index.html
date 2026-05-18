@@ -3226,12 +3226,6 @@ function SessionBuilder({ session, setSession, onSave, onCancel, onDelete, onLiv
         )}
       </Card>
 
-      {/* Attendance */}
-      <AttendanceSection session={session} players={players} T={T}
-        setStatusFor={setStatusFor} setNoteFor={setNoteFor} setLateMinFor={setLateMinFor}
-        markAll={markAll} resetAttendance={resetAttendance}
-        attCounts={attCounts}/>
-
       {/* Notes */}
       <Card padding={16}>
         <SectionTitle>Notes</SectionTitle>
@@ -3298,6 +3292,7 @@ function SessionBuilder({ session, setSession, onSave, onCancel, onDelete, onLiv
    SESSION LIVE (chronomètre + exercice en cours)
 ============================================================ */
 function SessionLive({ session, setSession, players, onEnd, T }) {
+  const [phase, setPhase] = useState('appel'); // 'appel' | 'training'
   const [currentExIdx, setCurrentExIdx] = useState(0);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0); // seconds
@@ -3315,6 +3310,31 @@ function SessionLive({ session, setSession, players, onEnd, T }) {
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [running]);
+
+  /* Attendance helpers (during live) */
+  function setStatusFor(pid, status) {
+    setSession(setAttendanceFor(session, pid, { status }));
+  }
+  function setNoteFor(pid, note) {
+    setSession(setAttendanceFor(session, pid, { note }));
+  }
+  function setLateMinFor(pid, lateMinutes) {
+    setSession(setAttendanceFor(session, pid, { lateMinutes }));
+  }
+  function markAll(status) {
+    const newAttendance = {};
+    players.forEach(p => {
+      const cur = getAttendance(session, p.id);
+      newAttendance[p.id] = { ...cur, status };
+    });
+    setSession({ ...session, attendance: newAttendance });
+  }
+  function resetAttendance() {
+    setSession({ ...session, attendance: {} });
+  }
+  const attCounts = attendanceCountsFor(session, players);
+  const presentCount = attCounts.present + attCounts.late;
+  const totalAppel = Object.keys(session.attendance || {}).length;
 
   const currentEx = session.exercises[currentExIdx] ? EXERCISES.find(e=>e.id===session.exercises[currentExIdx]) : null;
   const currentCat = currentEx ? EXERCISE_CATEGORIES.find(c=>c.id===currentEx.cat) : null;
@@ -3349,66 +3369,126 @@ function SessionLive({ session, setSession, players, onEnd, T }) {
           <IconBtn icon="arrowLeft" onClick={()=>onEnd(null)}/>
           <div style={{ flex:1 }}>
             <h1 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0, lineHeight:1.1 }}>
-              Séance en cours
+              {phase === 'appel' ? 'Appel des présences' : 'Séance en cours'}
             </h1>
             <div style={{ fontSize:12, color:T.text2, marginTop:2 }}>{sessionDisplayTheme(session)}</div>
           </div>
-          <Badge bg={T.dangerLight} color={T.danger}><span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span> LIVE</Badge>
+          {phase === 'training' && (
+            <Badge bg={T.dangerLight} color={T.danger}><span className="pulse" style={{ display:'inline-flex' }}><Icon name="dot" size={10} color={T.danger}/></span> LIVE</Badge>
+          )}
         </div>
 
-        {/* Global clock */}
-        <Card padding={20} style={{ marginBottom:16, textAlign:'center' }}>
-          <div style={{ fontSize:11, color:T.text2, textTransform:'uppercase', letterSpacing:1, fontWeight:700, marginBottom:6 }}>Temps total écoulé</div>
-          <div style={{ fontSize:48, fontWeight:800, color:T.text, fontVariantNumeric:'tabular-nums', letterSpacing:-1 }}>
-            {mmss(globalElapsed)}
-          </div>
-          <div style={{ fontSize:12, color:T.text2, marginTop:4 }}>sur {session.duration} min prévues</div>
-        </Card>
-
-        {/* Current exercise */}
-        {currentEx ? (
-          <Card padding={20} style={{ marginBottom:16, borderColor: currentCat.color }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14, flexWrap:'wrap' }}>
-              <Badge bg={currentCat.color} color="#fff"><Icon name={currentCat.icon} size={11}/> {currentCat.label}</Badge>
-              <Badge bg={T.card3} color={T.text2}>Exercice {currentExIdx+1}/{session.exercises.length}</Badge>
-            </div>
-            <h2 style={{ fontSize:24, fontWeight:800, color:T.text, margin:'0 0 8px 0' }}>{currentEx.name}</h2>
-            <div style={{ display:'flex', gap:14, flexWrap:'wrap', marginBottom:14, color:T.text2, fontSize:12 }}>
-              <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="clock" size={13}/> {currentEx.dur} min</span>
-              <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="users" size={13}/> {currentEx.players}</span>
-              <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="target" size={13}/> {currentEx.mat}</span>
-            </div>
-            <div style={{ padding:12, background:T.card2, borderRadius:10, marginBottom:10 }}>
-              <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', marginBottom:6 }}>Description</div>
-              <div style={{ fontSize:14, color:T.text, lineHeight:1.5 }}>{currentEx.desc}</div>
-            </div>
-            <div style={{ padding:12, background:T.warningLight, borderRadius:10 }}>
-              <div style={{ fontSize:11, fontWeight:700, color:T.warning, textTransform:'uppercase', marginBottom:6, display:'flex', alignItems:'center', gap:5 }}><Icon name="bulb" size={12}/> Conseils coach</div>
-              <div style={{ fontSize:14, color:T.text, lineHeight:1.5 }}>{currentEx.coach}</div>
-            </div>
-
-            <div style={{ marginTop:18 }}>
-              <ProgressBar value={elapsed} max={targetDuration||1} color={currentCat.color} height={10} label="Progression" showValue={false}/>
-              <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, fontWeight:600, color:T.text2, marginTop:4 }}>
-                <span>{mmss(elapsed)}</span>
-                <span>{mmss(targetDuration)}</span>
+        {/* PHASE: APPEL */}
+        {phase === 'appel' && (
+          <>
+            <Card padding={14} style={{ marginBottom:14, background:`linear-gradient(135deg, ${T.info}15 0%, ${T.card} 80%)`, borderColor:T.info+'40' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{
+                  width:42, height:42, borderRadius:11,
+                  background:T.info, color:'#fff',
+                  display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                }}><Icon name="users" size={20}/></div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:14, fontWeight:700, color:T.text }}>
+                    Fais l'appel avant de démarrer
+                  </div>
+                  <div style={{ fontSize:12, color:T.text2, marginTop:2 }}>
+                    Marque qui est présent, en retard, absent ou blessé
+                  </div>
+                </div>
               </div>
+            </Card>
+
+            <AttendanceSection session={session} players={players} T={T}
+              setStatusFor={setStatusFor} setNoteFor={setNoteFor} setLateMinFor={setLateMinFor}
+              markAll={markAll} resetAttendance={resetAttendance}
+              attCounts={attCounts}/>
+
+            {/* Bottom action: start training */}
+            <div style={{ display:'grid', gap:8 }}>
+              <Btn fullWidth size="xl" variant="success" icon="play" onClick={()=>setPhase('training')}>
+                Démarrer l'entraînement {presentCount > 0 && `(${presentCount} présents)`}
+              </Btn>
+              <Btn fullWidth size="md" variant="ghost" onClick={()=>onEnd(null)}>Annuler</Btn>
             </div>
-          </Card>
-        ) : (
-          <Card><EmptyState title="Aucun exercice" icon="clipboard"/></Card>
+          </>
         )}
 
-        {/* Controls */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:16 }}>
-          <Btn size="lg" variant="secondary" icon="skipBack" onClick={prevExercise} disabled={currentExIdx===0}>Précédent</Btn>
-          <Btn size="lg" variant={running?'danger':'success'} icon={running?'pause':'play'} onClick={()=>setRunning(!running)}>
-            {running?'Pause':'Démarrer'}
-          </Btn>
-          <Btn size="lg" variant="secondary" icon="skipForward" onClick={nextExercise} disabled={currentExIdx>=session.exercises.length-1}>Suivant</Btn>
-        </div>
+        {/* PHASE: TRAINING */}
+        {phase === 'training' && (
+          <>
+            {/* Mini bandeau présences + bouton retour appel */}
+            <Card padding={10} style={{ marginBottom:14 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                <div style={{
+                  width:30, height:30, borderRadius:8,
+                  background:T.success+'1F', color:T.success,
+                  display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0,
+                }}><Icon name="users" size={15}/></div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                    {presentCount}/{players.length} présents · {attCounts.late} retard{attCounts.late>1?'s':''} · {attCounts.excused+attCounts.unexcused} absent{attCounts.excused+attCounts.unexcused>1?'s':''}
+                  </div>
+                </div>
+                <Btn size="sm" variant="ghost" icon="edit" onClick={()=>setPhase('appel')}>Modifier l'appel</Btn>
+              </div>
+            </Card>
 
-        <Btn fullWidth size="lg" variant="primary" icon="check" onClick={finish}>Terminer la séance</Btn>
+            {/* Global clock */}
+            <Card padding={20} style={{ marginBottom:16, textAlign:'center' }}>
+              <div style={{ fontSize:11, color:T.text2, textTransform:'uppercase', letterSpacing:1, fontWeight:700, marginBottom:6 }}>Temps total écoulé</div>
+              <div style={{ fontSize:48, fontWeight:800, color:T.text, fontVariantNumeric:'tabular-nums', letterSpacing:-1 }}>
+                {mmss(globalElapsed)}
+              </div>
+              <div style={{ fontSize:12, color:T.text2, marginTop:4 }}>sur {session.duration} min prévues</div>
+            </Card>
+
+            {/* Current exercise */}
+            {currentEx ? (
+              <Card padding={20} style={{ marginBottom:16, borderColor: currentCat.color }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14, flexWrap:'wrap' }}>
+                  <Badge bg={currentCat.color} color="#fff"><Icon name={currentCat.icon} size={11}/> {currentCat.label}</Badge>
+                  <Badge bg={T.card3} color={T.text2}>Exercice {currentExIdx+1}/{session.exercises.length}</Badge>
+                </div>
+                <h2 style={{ fontSize:24, fontWeight:800, color:T.text, margin:'0 0 8px 0' }}>{currentEx.name}</h2>
+                <div style={{ display:'flex', gap:14, flexWrap:'wrap', marginBottom:14, color:T.text2, fontSize:12 }}>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="clock" size={13}/> {currentEx.dur} min</span>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="users" size={13}/> {currentEx.players}</span>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="target" size={13}/> {currentEx.mat}</span>
+                </div>
+                <div style={{ padding:12, background:T.card2, borderRadius:10, marginBottom:10 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', marginBottom:6 }}>Description</div>
+                  <div style={{ fontSize:14, color:T.text, lineHeight:1.5 }}>{currentEx.desc}</div>
+                </div>
+                <div style={{ padding:12, background:T.warningLight, borderRadius:10 }}>
+                  <div style={{ fontSize:11, fontWeight:700, color:T.warning, textTransform:'uppercase', marginBottom:6, display:'flex', alignItems:'center', gap:5 }}><Icon name="bulb" size={12}/> Conseils coach</div>
+                  <div style={{ fontSize:14, color:T.text, lineHeight:1.5 }}>{currentEx.coach}</div>
+                </div>
+
+                <div style={{ marginTop:18 }}>
+                  <ProgressBar value={elapsed} max={targetDuration||1} color={currentCat.color} height={10} label="Progression" showValue={false}/>
+                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, fontWeight:600, color:T.text2, marginTop:4 }}>
+                    <span>{mmss(elapsed)}</span>
+                    <span>{mmss(targetDuration)}</span>
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <Card><EmptyState title="Aucun exercice" icon="clipboard"/></Card>
+            )}
+
+            {/* Controls */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:16 }}>
+              <Btn size="lg" variant="secondary" icon="skipBack" onClick={prevExercise} disabled={currentExIdx===0}>Précédent</Btn>
+              <Btn size="lg" variant={running?'danger':'success'} icon={running?'pause':'play'} onClick={()=>setRunning(!running)}>
+                {running?'Pause':'Démarrer'}
+              </Btn>
+              <Btn size="lg" variant="secondary" icon="skipForward" onClick={nextExercise} disabled={currentExIdx>=session.exercises.length-1}>Suivant</Btn>
+            </div>
+
+            <Btn fullWidth size="lg" variant="primary" icon="check" onClick={finish}>Terminer la séance</Btn>
+          </>
+        )}
       </PageContainer>
     </div>
   );
