@@ -2138,8 +2138,9 @@ function GroupePage({ players, setPlayers, evals, T }) {
    SÉANCES (Sessions + exercise library)
 ============================================================ */
 function SeancesPage({ sessions, setSessions, players, T, showToast }) {
-  const [view, setView] = useState('list'); // list | builder | exercises | live
+  const [view, setView] = useState('list'); // list | builder | exercises | live | recap
   const [editing, setEditing] = useState(null);
+  const [recapSession, setRecapSession] = useState(null);
   const [liveSession, setLiveSession] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [search, setSearch] = useState('');
@@ -2156,7 +2157,16 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
   }, [sessions, tabs]);
 
   function startNew() { setEditing({ ...newSession() }); setView('builder'); }
-  function startEdit(s) { setEditing({ ...s }); setView('builder'); }
+  function startEdit(s) { setEditing({ ...s }); setView('builder'); setRecapSession(null); }
+  function openSession(s) {
+    // Si la séance est terminée → page récap, sinon → builder direct
+    if (s.done) {
+      setRecapSession(s);
+      setView('recap');
+    } else {
+      startEdit(s);
+    }
+  }
   function saveSession() {
     if (!editing) return;
     setSessions(prev => {
@@ -2164,16 +2174,28 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
       if (idx >= 0) { const copy=[...prev]; copy[idx]=editing; return copy; }
       return [...prev, editing];
     });
-    setEditing(null); setView('list');
+    // Si la séance éditée était une séance terminée, on retourne au récap (actualisé)
+    if (editing.done) {
+      setRecapSession(editing);
+      setView('recap');
+    } else {
+      setView('list');
+    }
+    setEditing(null);
     showToast('Séance enregistrée', 'success');
   }
   function deleteSession(s) {
     setSessions(prev => prev.filter(x => x.id !== s.id));
     setConfirmDelete(null);
     if (editing && editing.id===s.id) { setEditing(null); setView('list'); }
+    if (recapSession && recapSession.id===s.id) { setRecapSession(null); setView('list'); }
   }
   function toggleDone(s) {
     setSessions(prev => prev.map(x => x.id===s.id ? {...x, done:!x.done} : x));
+    // Si on dé-termine la séance affichée en récap, retour à la liste
+    if (recapSession && recapSession.id===s.id && s.done) {
+      setRecapSession(null); setView('list');
+    }
   }
   function startLive(s) {
     setLiveSession({ ...s });
@@ -2192,10 +2214,25 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
     return <SessionLive session={liveSession} setSession={setLiveSession} players={players} onEnd={endLive} T={T}/>;
   }
 
+  // ===== RECAP VIEW (séance terminée) =====
+  if (view === 'recap' && recapSession) {
+    // Toujours afficher la version à jour depuis sessions
+    const fresh = sessions.find(s => s.id === recapSession.id) || recapSession;
+    return <SessionRecap session={fresh} players={players} T={T}
+      onBack={()=>{ setRecapSession(null); setView('list'); }}
+      onEdit={()=>startEdit(fresh)}
+      onToggleDone={()=>toggleDone(fresh)}
+      onDelete={()=>setConfirmDelete(fresh)}
+      confirmDelete={confirmDelete} setConfirmDelete={setConfirmDelete} deleteSession={deleteSession}/>;
+  }
+
   // ===== BUILDER =====
   if (view === 'builder' && editing) {
     return <SessionBuilder session={editing} setSession={setEditing}
-      onSave={saveSession} onCancel={()=>{setEditing(null);setView('list');}}
+      onSave={saveSession} onCancel={()=>{
+        if (recapSession) { setView('recap'); } else { setView('list'); }
+        setEditing(null);
+      }}
       onDelete={()=>setConfirmDelete(editing)}
       onLive={()=>{ saveSession(); startLive(editing); }}
       players={players} T={T}
@@ -2230,7 +2267,7 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
             const themeColors = s.exercises.length>0 ? EXERCISE_CATEGORIES.find(c=>c.id===EXERCISES.find(e=>e.id===s.exercises[0])?.cat)?.color : T.info;
             const totalDuration = s.exercises.reduce((sum,eid) => sum + (EXERCISES.find(e=>e.id===eid)?.dur||0), 0);
             return (
-              <Card key={s.id} padding={14} hoverable onClick={()=>startEdit(s)}>
+              <Card key={s.id} padding={14} hoverable onClick={()=>openSession(s)}>
                 <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                   <div style={{
                     width:54, height:54, borderRadius:14,
@@ -2269,6 +2306,351 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
 
       <ConfirmDialog open={!!confirmDelete} title="Supprimer cette séance ?"
         message="Cette action est irréversible."
+        onConfirm={()=>deleteSession(confirmDelete)} onCancel={()=>setConfirmDelete(null)}/>
+    </PageContainer>
+  );
+}
+
+/* ============================================================
+   ATTENDANCE SECTION (présences avec 5 états + notes + actions globales)
+============================================================ */
+/* ============================================================
+   SESSION RECAP (page récap d'une séance terminée — lecture seule)
+============================================================ */
+function SessionRecap({ session, players, T, onBack, onEdit, onToggleDone, onDelete, confirmDelete, setConfirmDelete, deleteSession }) {
+  const themes = (session.themes || []).map(id => SESSION_THEMES.find(t=>t.id===id)).filter(Boolean);
+  const totalDuration = (session.exercises || []).reduce((sum,eid) => sum + (EXERCISES.find(e=>e.id===eid)?.dur||0), 0);
+  const attCounts = attendanceCountsFor(session, players);
+  const totalPresent = attCounts.present + attCounts.late;
+  const totalAbsent = attCounts.excused + attCounts.unexcused;
+  const presentRate = players.length > 0 ? totalPresent / players.length : 0;
+
+  // Distribution exercices par catégorie
+  const catDistribution = useMemo(() => {
+    const m = {};
+    (session.exercises || []).forEach(eid => {
+      const ex = EXERCISES.find(e => e.id === eid);
+      if (!ex) return;
+      m[ex.cat] = (m[ex.cat] || 0) + (ex.dur || 0);
+    });
+    return Object.entries(m)
+      .map(([cat, dur]) => ({ ...EXERCISE_CATEGORIES.find(c=>c.id===cat), duration:dur }))
+      .filter(c => c.id)
+      .sort((a,b) => b.duration - a.duration);
+  }, [session.exercises]);
+
+  // Players grouped by attendance status
+  const playersByStatus = useMemo(() => {
+    const grp = { present:[], late:[], excused:[], unexcused:[], injured:[] };
+    (players || []).forEach(p => {
+      const att = getAttendance(session, p.id);
+      if (grp[att.status]) grp[att.status].push({ player:p, ...att });
+    });
+    return grp;
+  }, [session, players]);
+
+  return (
+    <PageContainer>
+      {/* HEADER */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:18, flexWrap:'wrap' }}>
+        <IconBtn icon="arrowLeft" onClick={onBack}/>
+        <div style={{ flex:1, minWidth:200 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4, flexWrap:'wrap' }}>
+            <Badge bg={T.successLight} color={T.success}><Icon name="check" size={11}/> Terminée</Badge>
+            <Badge bg={T.card3} color={T.text2}>{dateFmt(session.date)}</Badge>
+            <Badge bg={T.card3} color={T.text2}>{session.time}</Badge>
+            <Badge bg={T.card3} color={T.text2}>{session.duration} min</Badge>
+          </div>
+          <h1 style={{ fontSize:22, fontWeight:800, color:T.text, margin:0, letterSpacing:-0.3, lineHeight:1.2 }}>
+            {sessionDisplayTheme(session)}
+          </h1>
+        </div>
+        <Btn variant="secondary" icon="edit" onClick={onEdit}>Modifier</Btn>
+      </div>
+
+      {/* QUICK INFO STRIP */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(110px,1fr))', gap:10, marginBottom:14 }}>
+        <Card padding={14}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:T.info+'18', color:T.info, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="pin" size={18}/>
+            </div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Lieu</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{session.location || '—'}</div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={14}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:T.success+'18', color:T.success, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="users" size={18}/>
+            </div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Présence</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, fontVariantNumeric:'tabular-nums' }}>{totalPresent}/{players.length} <span style={{ color:T.text2, fontWeight:600 }}>({Math.round(presentRate*100)}%)</span></div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={14}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:T.accent+'18', color:T.accent, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="clipboard" size={18}/>
+            </div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Exercices</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, fontVariantNumeric:'tabular-nums' }}>{(session.exercises||[]).length} <span style={{ color:T.text2, fontWeight:600 }}>({totalDuration} min)</span></div>
+            </div>
+          </div>
+        </Card>
+        <Card padding={14}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:T.warning+'18', color:T.warning, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="clock" size={18}/>
+            </div>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Retards</div>
+              <div style={{ fontSize:13, fontWeight:700, color:T.text, fontVariantNumeric:'tabular-nums' }}>{attCounts.late}</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      {/* THEMES + OBJECTIVES */}
+      {(themes.length > 0 || session.theme || session.objectives) && (
+        <Card padding={18} style={{ marginBottom:14 }}>
+          {themes.length > 0 && (
+            <div style={{ marginBottom: (session.theme || session.objectives) ? 14 : 0 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8 }}>Thèmes travaillés</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                {themes.map(t => (
+                  <span key={t.id} style={{
+                    padding:'5px 11px', borderRadius:8,
+                    background: t.color+'1E', color: t.color,
+                    fontSize:12.5, fontWeight:600,
+                    border:`1px solid ${t.color}40`,
+                  }}>{t.label}</span>
+                ))}
+                {session.theme && (
+                  <span style={{
+                    padding:'5px 11px', borderRadius:8,
+                    background: T.card3, color: T.text,
+                    fontSize:12.5, fontWeight:600,
+                    border:`1px solid ${T.border}`,
+                  }}>{session.theme}</span>
+                )}
+              </div>
+            </div>
+          )}
+          {!themes.length && session.theme && (
+            <div style={{ marginBottom: session.objectives ? 14 : 0 }}>
+              <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:6 }}>Thème</div>
+              <div style={{ fontSize:14, color:T.text }}>{session.theme}</div>
+            </div>
+          )}
+          {session.objectives && (
+            <div>
+              <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:6 }}>Objectifs</div>
+              <div style={{ fontSize:14, color:T.text, lineHeight:1.5, whiteSpace:'pre-wrap' }}>{session.objectives}</div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ATTENDANCE BREAKDOWN */}
+      <Card padding={18} style={{ marginBottom:14 }}>
+        <SectionTitle>Présences</SectionTitle>
+
+        {/* Stats overview */}
+        <div style={{
+          display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(85px,1fr))', gap:8, marginBottom:16,
+        }}>
+          {ATTENDANCE_STATES.map(st => {
+            const color = T[st.colorKey];
+            const n = attCounts[st.id];
+            return (
+              <div key={st.id} style={{
+                padding:'12px 8px',
+                background: n>0 ? color+'15' : T.card2,
+                borderRadius:10,
+                border:`1px solid ${n>0 ? color+'40' : T.border}`,
+                textAlign:'center',
+                opacity: n===0 ? 0.55 : 1,
+              }}>
+                <Icon name={st.icon} size={15} color={color}/>
+                <div style={{ fontSize:20, fontWeight:800, color:T.text, lineHeight:1, marginTop:5, fontVariantNumeric:'tabular-nums' }}>{n}</div>
+                <div style={{ fontSize:9.5, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.3, marginTop:3 }}>{st.short}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Présents / Retards : juste avatars */}
+        {(playersByStatus.present.length + playersByStatus.late.length) > 0 && (
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:T.success, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8, display:'flex', alignItems:'center', gap:6 }}>
+              <Icon name="check" size={12}/> Présents ({playersByStatus.present.length + playersByStatus.late.length})
+            </div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+              {[...playersByStatus.present, ...playersByStatus.late].map(({ player, status, lateMinutes, note }) => {
+                const pos = POSITIONS.find(x => x.id === player.position);
+                const isLate = status === 'late';
+                return (
+                  <div key={player.id} title={isLate ? `Retard${lateMinutes>0?` +${lateMinutes}min`:''}${note?` — ${note}`:''}` : 'Présent'}
+                    style={{
+                      display:'flex', alignItems:'center', gap:7,
+                      padding:'5px 11px 5px 5px',
+                      background: isLate ? T.warningLight : T.card2,
+                      border:`1px solid ${isLate ? T.warning+'50' : T.border}`,
+                      borderRadius:999,
+                    }}>
+                    <Avatar name={`${player.firstName} ${player.lastName}`} size={26} color={pos?.color}/>
+                    <span style={{ fontSize:12, fontWeight:600, color:T.text }}>
+                      #{player.number||'?'} {player.lastName || player.firstName}
+                    </span>
+                    {isLate && (
+                      <span style={{ fontSize:10, fontWeight:700, color:T.warning, padding:'1px 6px', background:T.warning+'20', borderRadius:6 }}>
+                        +{lateMinutes||'?'}min
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Absents / Blessés : détaillés avec notes */}
+        {['excused','unexcused','injured'].map(statusKey => {
+          const list = playersByStatus[statusKey];
+          if (list.length === 0) return null;
+          const st = ATTENDANCE_STATES.find(s => s.id === statusKey);
+          const color = T[st.colorKey];
+          return (
+            <div key={statusKey} style={{ marginBottom:14 }}>
+              <div style={{ fontSize:11, fontWeight:700, color, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8, display:'flex', alignItems:'center', gap:6 }}>
+                <Icon name={st.icon} size={12}/> {st.label} ({list.length})
+              </div>
+              <div style={{ display:'grid', gap:6 }}>
+                {list.map(({ player, note }) => {
+                  const pos = POSITIONS.find(x => x.id === player.position);
+                  return (
+                    <div key={player.id} style={{
+                      display:'flex', alignItems:'center', gap:10,
+                      padding:'9px 12px', background: color+'12',
+                      border:`1px solid ${color}30`, borderRadius:9,
+                    }}>
+                      <Avatar name={`${player.firstName} ${player.lastName}`} size={32} color={pos?.color}/>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                          #{player.number||'?'} {player.firstName} {player.lastName}
+                        </div>
+                        {note && (
+                          <div style={{ fontSize:11.5, color:T.text2, marginTop:2, fontStyle:'italic', display:'flex', alignItems:'center', gap:5 }}>
+                            <Icon name="noteEdit" size={10} color={T.text3}/>
+                            {note}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </Card>
+
+      {/* EXERCISES */}
+      <Card padding={18} style={{ marginBottom:14 }}>
+        <SectionTitle>Exercices ({(session.exercises||[]).length})</SectionTitle>
+        {(session.exercises||[]).length === 0 ? (
+          <EmptyState icon="clipboard" title="Aucun exercice" message="Aucun exercice n'a été ajouté à cette séance"/>
+        ) : (
+          <>
+            {/* Bar of category distribution */}
+            {catDistribution.length > 0 && (
+              <div style={{ marginBottom:14 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:6 }}>Répartition ({totalDuration} min)</div>
+                <div style={{ display:'flex', height:14, borderRadius:7, overflow:'hidden', background:T.card3 }}>
+                  {catDistribution.map(c => (
+                    <div key={c.id} title={`${c.label} — ${c.duration} min`}
+                      style={{
+                        background:c.color,
+                        width:`${(c.duration/totalDuration)*100}%`,
+                      }}/>
+                  ))}
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginTop:6 }}>
+                  {catDistribution.map(c => (
+                    <span key={c.id} style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
+                      <span style={{ width:8, height:8, borderRadius:4, background:c.color }}/>
+                      {c.label} ({c.duration}m)
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div style={{ display:'grid', gap:8 }}>
+              {(session.exercises||[]).map((eid, idx) => {
+                const ex = EXERCISES.find(e => e.id === eid);
+                if (!ex) return null;
+                const cat = EXERCISE_CATEGORIES.find(c => c.id === ex.cat);
+                return (
+                  <div key={eid+'_'+idx} style={{
+                    display:'flex', alignItems:'flex-start', gap:10,
+                    padding:'10px 12px', background:T.card2, borderRadius:10,
+                    border:`1px solid ${T.border}`,
+                  }}>
+                    <div style={{
+                      width:30, height:30, borderRadius:8, flexShrink:0,
+                      background:cat.color+'1F', color:cat.color,
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                      fontSize:12, fontWeight:800,
+                    }}>{idx+1}</div>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:7, flexWrap:'wrap', marginBottom:3 }}>
+                        <div style={{ fontSize:13.5, fontWeight:700, color:T.text }}>{ex.name}</div>
+                        <Badge bg={cat.color+'1F'} color={cat.color}><Icon name={cat.icon} size={10}/> {cat.label}</Badge>
+                        <Badge bg={T.card3} color={T.text2}><Icon name="clock" size={10}/> {ex.dur} min</Badge>
+                      </div>
+                      <div style={{ fontSize:11.5, color:T.text2, lineHeight:1.45 }}>{ex.desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Card>
+
+      {/* NOTES */}
+      {session.notes && session.notes.trim() && (
+        <Card padding={18} style={{ marginBottom:14 }}>
+          <SectionTitle>Notes coach</SectionTitle>
+          <div style={{
+            fontSize:14, color:T.text, lineHeight:1.6,
+            whiteSpace:'pre-wrap',
+            padding:14, background:T.card2, borderRadius:9,
+            border:`1px solid ${T.border}`,
+          }}>{session.notes}</div>
+        </Card>
+      )}
+
+      {/* BOTTOM ACTIONS */}
+      <Card padding={14}>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <Btn variant="primary" icon="edit" onClick={onEdit}>Modifier la séance</Btn>
+            <Btn variant="secondary" icon="refresh" onClick={onToggleDone}>Marquer non terminée</Btn>
+          </div>
+          <Btn variant="danger" icon="trash" onClick={onDelete}>Supprimer</Btn>
+        </div>
+      </Card>
+
+      <ConfirmDialog open={!!confirmDelete} title="Supprimer cette séance ?"
+        message="Cette action est irréversible. Toutes les présences et notes seront perdues."
         onConfirm={()=>deleteSession(confirmDelete)} onCancel={()=>setConfirmDelete(null)}/>
     </PageContainer>
   );
