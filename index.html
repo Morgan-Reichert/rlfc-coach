@@ -2308,7 +2308,7 @@ function GroupePage({ players, setPlayers, evals, T }) {
 /* ============================================================
    SÉANCES (Sessions + exercise library)
 ============================================================ */
-function SeancesPage({ sessions, setSessions, players, T, showToast }) {
+function SeancesPage({ sessions, setSessions, players, T, showToast, pendingAction, setPendingAction }) {
   const [view, setView] = useState('list'); // list | builder | exercises | live | recap
   const [editing, setEditing] = useState(null);
   const [recapSession, setRecapSession] = useState(null);
@@ -2327,10 +2327,14 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
     return result;
   }, [sessions, tabs]);
 
-  function startNew() { setEditing({ ...newSession() }); setView('builder'); }
+  function startNew(prefill) {
+    const s = { ...newSession() };
+    if (prefill && prefill.date) s.date = prefill.date;
+    if (prefill && prefill.time) s.time = prefill.time;
+    setEditing(s); setView('builder'); setRecapSession(null);
+  }
   function startEdit(s) { setEditing({ ...s }); setView('builder'); setRecapSession(null); }
   function openSession(s) {
-    // Si la séance est terminée → page récap, sinon → builder direct
     if (s.done) {
       setRecapSession(s);
       setView('recap');
@@ -2338,6 +2342,19 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
       startEdit(s);
     }
   }
+
+  // Consume pendingAction (from calendar deep-link)
+  useEffect(() => {
+    if (!pendingAction) return;
+    if (pendingAction.type === 'newSession') {
+      startNew({ date: pendingAction.date, time: pendingAction.time });
+      setPendingAction(null);
+    } else if (pendingAction.type === 'openSession' && pendingAction.id) {
+      const s = sessions.find(x => x.id === pendingAction.id);
+      if (s) openSession(s);
+      setPendingAction(null);
+    }
+  }, [pendingAction]);
   function saveSession() {
     if (!editing) return;
     setSessions(prev => {
@@ -3468,7 +3485,7 @@ function ExercisesLibrary({ onBack, T }) {
 /* ============================================================
    MATCH PAGE
 ============================================================ */
-function MatchPage({ matches, setMatches, players, matchPresets, setMatchPresets, T, showToast }) {
+function MatchPage({ matches, setMatches, players, matchPresets, setMatchPresets, T, showToast, pendingAction, setPendingAction }) {
   const [view, setView] = useState('list'); // list | edit | live | recap
   const [editing, setEditing] = useState(null);
   const [recapMatch, setRecapMatch] = useState(null);
@@ -3484,8 +3501,10 @@ function MatchPage({ matches, setMatches, players, matchPresets, setMatchPresets
     return result;
   }, [matches, tabs]);
 
-  function startNew() {
+  function startNew(prefill) {
     const m = newMatch();
+    if (prefill && prefill.date) m.date = prefill.date;
+    if (prefill && prefill.time) m.time = prefill.time;
     m.lineup = ensureLineupArray(m);
     setEditing(m); setView('edit'); setRecapMatch(null);
   }
@@ -3500,6 +3519,19 @@ function MatchPage({ matches, setMatches, players, matchPresets, setMatchPresets
       startEdit(m);
     }
   }
+
+  // Consume pendingAction (from calendar deep-link)
+  useEffect(() => {
+    if (!pendingAction) return;
+    if (pendingAction.type === 'newMatch') {
+      startNew({ date: pendingAction.date, time: pendingAction.time });
+      setPendingAction(null);
+    } else if (pendingAction.type === 'openMatch' && pendingAction.id) {
+      const m = matches.find(x => x.id === pendingAction.id);
+      if (m) openMatch(m);
+      setPendingAction(null);
+    }
+  }, [pendingAction]);
   function saveMatch() {
     if (!editing) return;
     setMatches(prev => {
@@ -5457,7 +5489,7 @@ function SuiviPage({ players, evals, setEvals, matches, sessions, T, showToast }
 /* ============================================================
    SAISON (calendar + stats globales)
 ============================================================ */
-function SaisonPage({ players, matches, sessions, evals, T, showToast }) {
+function SaisonPage({ players, matches, sessions, evals, T, showToast, triggerAction }) {
   const [tab, setTab] = useState(0); // 0=overview 1=calendar 2=playtime
 
   const stats = useMemo(() => {
@@ -5555,7 +5587,7 @@ function SaisonPage({ players, matches, sessions, evals, T, showToast }) {
         </>
       )}
 
-      {tab === 1 && <SeasonCalendar matches={matches} sessions={sessions} T={T}/>}
+      {tab === 1 && <SeasonCalendar matches={matches} sessions={sessions} T={T} triggerAction={triggerAction}/>}
 
       {tab === 2 && (
         <Card padding={16}>
@@ -5732,13 +5764,15 @@ function TeamAttendanceTab({ players, sessions, T }) {
   );
 }
 
-function SeasonCalendar({ matches, sessions, T }) {
+function SeasonCalendar({ matches, sessions, T, triggerAction }) {
   const [monthOffset, setMonthOffset] = useState(0);
+  const [selectedCell, setSelectedCell] = useState(null);
+
   const now = new Date();
   const month = new Date(now.getFullYear(), now.getMonth()+monthOffset, 1);
   const monthLabel = month.toLocaleDateString('fr-FR', { month:'long', year:'numeric' });
   const firstDay = new Date(month);
-  const startDay = (firstDay.getDay()+6)%7; // Monday start
+  const startDay = (firstDay.getDay()+6)%7;
   const daysInMonth = new Date(month.getFullYear(), month.getMonth()+1, 0).getDate();
   const monthInSeason = SEASON_MONTHS_ON.includes(month.getMonth());
 
@@ -5756,111 +5790,349 @@ function SeasonCalendar({ matches, sessions, T }) {
   const weekdays = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
   const todayIsoVal = todayIso();
 
+  function openDay(cell) { setSelectedCell(cell); }
+  function closeDay() { setSelectedCell(null); }
+  function handleAction(action) {
+    closeDay();
+    if (triggerAction) triggerAction(action);
+  }
+
   return (
-    <Card padding={16}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, gap:8 }}>
-        <IconBtn icon="chevronLeft" onClick={()=>setMonthOffset(monthOffset-1)}/>
-        <div style={{ flex:1, textAlign:'center' }}>
-          <h3 style={{ fontSize:16, fontWeight:700, color:T.text, margin:0, textTransform:'capitalize', letterSpacing:-0.2 }}>{monthLabel}</h3>
-          {!monthInSeason && <div style={{ fontSize:10.5, color:T.text3, marginTop:2, fontWeight:600, letterSpacing:0.4 }}>HORS SAISON</div>}
+    <>
+      <Card padding={16}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, gap:8 }}>
+          <IconBtn icon="chevronLeft" onClick={()=>setMonthOffset(monthOffset-1)}/>
+          <div style={{ flex:1, textAlign:'center' }}>
+            <h3 style={{ fontSize:16, fontWeight:700, color:T.text, margin:0, textTransform:'capitalize', letterSpacing:-0.2 }}>{monthLabel}</h3>
+            {!monthInSeason && <div style={{ fontSize:10.5, color:T.text3, marginTop:2, fontWeight:600, letterSpacing:0.4 }}>HORS SAISON</div>}
+          </div>
+          <IconBtn icon="chevronRight" onClick={()=>setMonthOffset(monthOffset+1)}/>
         </div>
-        <IconBtn icon="chevronRight" onClick={()=>setMonthOffset(monthOffset+1)}/>
-      </div>
 
-      {/* Legend */}
-      <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center', marginBottom:14, padding:'8px 10px', background:T.card2, borderRadius:9, border:`1px solid ${T.border}` }}>
-        <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
-          <span style={{ width:10, height:10, borderRadius:3, background:T.successLight, border:`1.5px dashed ${T.success}` }}/>Créneau dispo
-        </span>
-        <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
-          <span style={{ width:10, height:10, borderRadius:3, background:T.info }}/>Séance planifiée
-        </span>
-        <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
-          <span style={{ width:10, height:10, borderRadius:3, background:T.accent }}/>Match
-        </span>
-      </div>
+        {/* Quick: go back to current month */}
+        {monthOffset !== 0 && (
+          <div style={{ textAlign:'center', marginBottom:6 }}>
+            <Btn size="xs" variant="ghost" icon="calendar" onClick={()=>setMonthOffset(0)}>Aujourd'hui</Btn>
+          </div>
+        )}
 
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:4, marginBottom:8 }}>
-        {weekdays.map((w,i) => (
-          <div key={w} style={{
-            textAlign:'center', fontSize:11, fontWeight:700,
-            color: (TRAINING_DAYS.includes((i+1)%7)) ? T.success : T.text2,
-            padding:4, textTransform:'uppercase', letterSpacing:0.5,
-          }}>{w}</div>
-        ))}
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:4 }}>
-        {cells.map((cell,i) => {
-          if (!cell) return <div key={i}/>;
-          const hasMatch = cell.matches.length > 0;
-          const hasSession = cell.sessions.length > 0;
-          const isToday = cell.iso === todayIsoVal;
-          const showTrainingSlot = cell.isTraining && !hasSession && !hasMatch;
-          return (
-            <div key={i} title={showTrainingSlot ? `Créneau d'entraînement disponible — ${TRAINING_TIME_START} → ${TRAINING_TIME_END}` : ''}
-              style={{
-                minHeight:68, padding:6, borderRadius:9,
-                background: isToday ? T.accentLight : (showTrainingSlot ? T.successLight : T.card2),
-                border: `1px solid ${isToday ? T.accent : (showTrainingSlot ? T.success+'60' : T.border)}`,
-                borderStyle: showTrainingSlot && !isToday ? 'dashed' : 'solid',
-                display:'flex', flexDirection:'column', gap:3,
-                position:'relative', overflow:'hidden',
-              }}>
-              <div style={{
-                display:'flex', alignItems:'center', justifyContent:'space-between',
-              }}>
+        {/* Legend */}
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', justifyContent:'center', marginBottom:14, padding:'8px 10px', background:T.card2, borderRadius:9, border:`1px solid ${T.border}` }}>
+          <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
+            <span style={{ width:10, height:10, borderRadius:3, background:T.successLight, border:`1.5px dashed ${T.success}` }}/>Créneau dispo
+          </span>
+          <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
+            <span style={{ width:10, height:10, borderRadius:3, background:T.info }}/>Séance
+          </span>
+          <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, color:T.text2, fontWeight:600 }}>
+            <span style={{ width:10, height:10, borderRadius:3, background:T.accent }}/>Match
+          </span>
+          <span style={{ fontSize:11, color:T.text3, fontWeight:600, fontStyle:'italic' }}>· Tap un jour pour les actions</span>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:4, marginBottom:8 }}>
+          {weekdays.map((w,i) => (
+            <div key={w} style={{
+              textAlign:'center', fontSize:11, fontWeight:700,
+              color: (TRAINING_DAYS.includes((i+1)%7)) ? T.success : T.text2,
+              padding:4, textTransform:'uppercase', letterSpacing:0.5,
+            }}>{w}</div>
+          ))}
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(7,1fr)', gap:4 }}>
+          {cells.map((cell,i) => {
+            if (!cell) return <div key={i}/>;
+            const hasMatch = cell.matches.length > 0;
+            const hasSession = cell.sessions.length > 0;
+            const isToday = cell.iso === todayIsoVal;
+            const showTrainingSlot = cell.isTraining && !hasSession && !hasMatch;
+            return (
+              <button key={i} onClick={()=>openDay(cell)}
+                title={showTrainingSlot ? `Créneau d'entraînement — ${TRAINING_TIME_START} → ${TRAINING_TIME_END}` : `${cell.d} · Tap pour actions`}
+                style={{
+                  minHeight:68, padding:6, borderRadius:9,
+                  background: isToday ? T.accentLight : (showTrainingSlot ? T.successLight : T.card2),
+                  border: `1px solid ${isToday ? T.accent : (showTrainingSlot ? T.success+'60' : T.border)}`,
+                  borderStyle: showTrainingSlot && !isToday ? 'dashed' : 'solid',
+                  display:'flex', flexDirection:'column', gap:3,
+                  position:'relative', overflow:'hidden',
+                  cursor:'pointer', textAlign:'left',
+                  transition:'transform 0.1s, box-shadow 0.15s',
+                  WebkitTapHighlightColor: 'rgba(0,0,0,0)',
+                }}
+                onMouseEnter={(e)=>{ e.currentTarget.style.boxShadow=T.shadow; }}
+                onMouseLeave={(e)=>{ e.currentTarget.style.boxShadow='none'; }}>
                 <div style={{
-                  fontSize:11.5, fontWeight: cell.isTraining ? 700 : 500,
-                  color: showTrainingSlot ? T.success : (isToday ? T.accent : T.text),
-                  fontVariantNumeric:'tabular-nums',
-                }}>{cell.d}</div>
-                {cell.isTraining && (
-                  <Icon name="clock" size={9} color={showTrainingSlot ? T.success : T.text3}/>
-                )}
-              </div>
-              {showTrainingSlot && (
-                <div style={{
-                  fontSize:8.5, fontWeight:700, color:T.success,
-                  letterSpacing:0.2, lineHeight:1.2,
-                  marginTop:'auto',
+                  display:'flex', alignItems:'center', justifyContent:'space-between',
                 }}>
-                  {TRAINING_TIME_START.replace(':','h')}<br/>{TRAINING_TIME_END.replace(':','h')}
+                  <div style={{
+                    fontSize:11.5, fontWeight: cell.isTraining ? 700 : 500,
+                    color: showTrainingSlot ? T.success : (isToday ? T.accent : T.text),
+                    fontVariantNumeric:'tabular-nums',
+                  }}>{cell.d}</div>
+                  {cell.isTraining && (
+                    <Icon name="clock" size={9} color={showTrainingSlot ? T.success : T.text3}/>
+                  )}
                 </div>
-              )}
-              {hasMatch && cell.matches.map(m => {
-                const mt = MATCH_TYPES.find(t=>t.id===m.type);
-                return (
-                  <div key={m.id} title={`${m.opponent} - ${m.time}`} style={{
-                    fontSize:9, fontWeight:700, color:'#fff',
-                    background: mt.color, padding:'2px 4px', borderRadius:4,
-                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                    display:'flex', alignItems:'center', gap:3,
-                  }}><Icon name="ball" size={9} color="#fff"/>{m.opponent ? m.opponent.slice(0,8) : 'Match'}</div>
-                );
-              })}
-              {hasSession && cell.sessions.map(s => {
-                const lbl = sessionDisplayTheme(s);
-                return (
-                  <div key={s.id} title={`${lbl} · ${s.time}`} style={{
-                    fontSize:9, fontWeight:700, color:'#fff',
-                    background: T.info, padding:'2px 4px', borderRadius:4,
-                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                    display:'flex', alignItems:'center', gap:3,
-                  }}><Icon name="clipboard" size={9} color="#fff"/>{lbl.slice(0,10)}</div>
-                );
-              })}
-            </div>
-          );
-        })}
+                {showTrainingSlot && (
+                  <div style={{
+                    fontSize:8.5, fontWeight:700, color:T.success,
+                    letterSpacing:0.2, lineHeight:1.2,
+                    marginTop:'auto',
+                  }}>
+                    {TRAINING_TIME_START.replace(':','h')}<br/>{TRAINING_TIME_END.replace(':','h')}
+                  </div>
+                )}
+                {hasMatch && cell.matches.map(m => {
+                  const mt = MATCH_TYPES.find(t=>t.id===m.type);
+                  return (
+                    <div key={m.id} style={{
+                      fontSize:9, fontWeight:700, color:'#fff',
+                      background: mt.color, padding:'2px 4px', borderRadius:4,
+                      whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                      display:'flex', alignItems:'center', gap:3,
+                    }}><Icon name="ball" size={9} color="#fff"/>{m.opponent ? m.opponent.slice(0,8) : 'Match'}</div>
+                  );
+                })}
+                {hasSession && cell.sessions.map(s => {
+                  const lbl = sessionDisplayTheme(s);
+                  return (
+                    <div key={s.id} style={{
+                      fontSize:9, fontWeight:700, color:'#fff',
+                      background: T.info, padding:'2px 4px', borderRadius:4,
+                      whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                      display:'flex', alignItems:'center', gap:3,
+                    }}><Icon name="clipboard" size={9} color="#fff"/>{lbl.slice(0,10)}</div>
+                  );
+                })}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop:14, padding:'10px 12px', background:T.card2, borderRadius:9, border:`1px solid ${T.border}`, display:'flex', alignItems:'center', gap:10 }}>
+          <Icon name="info" size={14} color={T.text2}/>
+          <div style={{ fontSize:11.5, color:T.text2, lineHeight:1.4 }}>
+            <strong style={{ color:T.text, fontWeight:700 }}>Saison U12</strong> · Entraînements <strong style={{ color:T.success }}>Mercredi</strong> & <strong style={{ color:T.success }}>Vendredi</strong> de <strong>{TRAINING_TIME_START.replace(':','h')}</strong> à <strong>{TRAINING_TIME_END.replace(':','h')}</strong> · d'août à mai
+          </div>
+        </div>
+      </Card>
+
+      {selectedCell && (
+        <DayDetailsModal cell={selectedCell} T={T} onClose={closeDay} onAction={handleAction}/>
+      )}
+    </>
+  );
+}
+
+/* ============================================================
+   DAY DETAILS MODAL (clic sur un jour du calendrier)
+============================================================ */
+function DayDetailsModal({ cell, T, onClose, onAction }) {
+  const isToday = cell.iso === todayIso();
+  const dateLabel = dateFmtLong(cell.iso);
+  const dayPast = new Date(cell.iso) < new Date(todayIso());
+
+  return (
+    <Modal open={true} onClose={onClose} title={null} width={500}>
+      {/* HEADER avec date */}
+      <div style={{
+        margin:'-22px -22px 16px -22px',
+        padding:'18px 22px',
+        background: cell.isTraining
+          ? `linear-gradient(135deg, ${T.success}15 0%, ${T.card} 80%)`
+          : (isToday ? `linear-gradient(135deg, ${T.accent}15 0%, ${T.card} 80%)` : T.card2),
+        borderBottom:`1px solid ${T.border}`,
+        display:'flex', alignItems:'center', gap:14,
+      }}>
+        <div style={{
+          width:54, height:54, borderRadius:14,
+          background: cell.isTraining ? T.success : (isToday ? T.accent : T.card3),
+          color: cell.isTraining || isToday ? '#fff' : T.text2,
+          display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+          flexShrink:0,
+        }}>
+          <div style={{ fontSize:22, fontWeight:800, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{cell.d}</div>
+          <div style={{ fontSize:9, fontWeight:700, textTransform:'uppercase', marginTop:2, letterSpacing:0.3 }}>
+            {cell.dt.toLocaleDateString('fr-FR',{ month:'short' }).replace('.','')}
+          </div>
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:11.5, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, fontWeight:700, marginBottom:3 }}>
+            {cell.dt.toLocaleDateString('fr-FR',{ weekday:'long' })}
+          </div>
+          <div style={{ fontSize:16, fontWeight:800, color:T.text, letterSpacing:-0.2, textTransform:'capitalize' }}>{dateLabel}</div>
+          {cell.isTraining && (
+            <Badge bg={T.success+'18'} color={T.success} style={{ marginTop:6 }}>
+              <Icon name="clock" size={10}/> Créneau {TRAINING_TIME_START.replace(':','h')} → {TRAINING_TIME_END.replace(':','h')}
+            </Badge>
+          )}
+          {isToday && (
+            <Badge bg={T.accentLight} color={T.accent} style={{ marginLeft:6, marginTop:6 }}>Aujourd'hui</Badge>
+          )}
+        </div>
+        <IconBtn icon="close" onClick={onClose} size={32}/>
       </div>
 
-      <div style={{ marginTop:14, padding:'10px 12px', background:T.card2, borderRadius:9, border:`1px solid ${T.border}`, display:'flex', alignItems:'center', gap:10 }}>
-        <Icon name="info" size={14} color={T.text2}/>
-        <div style={{ fontSize:11.5, color:T.text2, lineHeight:1.4 }}>
-          <strong style={{ color:T.text, fontWeight:700 }}>Saison U12</strong> · Entraînements <strong style={{ color:T.success }}>Mercredi</strong> & <strong style={{ color:T.success }}>Vendredi</strong> de <strong>{TRAINING_TIME_START.replace(':','h')}</strong> à <strong>{TRAINING_TIME_END.replace(':','h')}</strong> · d'août à mai
+      {/* EVENTS EXISTANTS */}
+      {(cell.sessions.length > 0 || cell.matches.length > 0) && (
+        <div style={{ marginBottom:18 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8 }}>
+            Événements ({cell.sessions.length + cell.matches.length})
+          </div>
+          <div style={{ display:'grid', gap:8 }}>
+            {cell.matches.map(m => {
+              const mt = MATCH_TYPES.find(t=>t.id===m.type);
+              const isDone = m.status === 'done';
+              const result = isDone ? (m.score.us > m.score.them ? 'V' : (m.score.us < m.score.them ? 'D' : 'N')) : null;
+              const resultColor = result==='V' ? T.success : result==='D' ? T.danger : (result==='N' ? T.warning : mt.color);
+              return (
+                <button key={m.id} onClick={()=>onAction({ type:'openMatch', id:m.id })}
+                  style={{
+                    width:'100%', padding:'10px 12px', background:T.card2, borderRadius:10,
+                    border:`1px solid ${T.border}`, borderLeft:`3px solid ${resultColor}`,
+                    cursor:'pointer', textAlign:'left',
+                    display:'flex', alignItems:'center', gap:10,
+                  }}
+                  onMouseEnter={(e)=>{e.currentTarget.style.background=T.card3}}
+                  onMouseLeave={(e)=>{e.currentTarget.style.background=T.card2}}>
+                  <div style={{
+                    width:36, height:36, borderRadius:9,
+                    background: isDone ? resultColor : mt.color+'1F',
+                    color: isDone ? '#fff' : mt.color,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    flexShrink:0,
+                  }}>
+                    {isDone ? <span style={{fontSize:13, fontWeight:800}}>{result}</span> : <Icon name="ball" size={18}/>}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                      {isDone ? <>RLFC {m.score.us}–{m.score.them} {m.opponent||'Adv.'}</>
+                              : <>vs {m.opponent || 'Adversaire'}</>}
+                    </div>
+                    <div style={{ fontSize:11, color:T.text2, marginTop:2, display:'flex', gap:6, flexWrap:'wrap' }}>
+                      <span>{m.time}</span>
+                      <span>·</span>
+                      <Badge bg={mt.color+'1F'} color={mt.color}>{mt.label}</Badge>
+                      <Badge bg={T.card3} color={T.text2}>{m.domicile?'Dom':'Ext'}</Badge>
+                    </div>
+                  </div>
+                  <Icon name="chevronRight" size={16} color={T.text3}/>
+                </button>
+              );
+            })}
+            {cell.sessions.map(s => {
+              const lbl = sessionDisplayTheme(s);
+              return (
+                <button key={s.id} onClick={()=>onAction({ type:'openSession', id:s.id })}
+                  style={{
+                    width:'100%', padding:'10px 12px', background:T.card2, borderRadius:10,
+                    border:`1px solid ${T.border}`, borderLeft:`3px solid ${T.info}`,
+                    cursor:'pointer', textAlign:'left',
+                    display:'flex', alignItems:'center', gap:10,
+                  }}
+                  onMouseEnter={(e)=>{e.currentTarget.style.background=T.card3}}
+                  onMouseLeave={(e)=>{e.currentTarget.style.background=T.card2}}>
+                  <div style={{
+                    width:36, height:36, borderRadius:9,
+                    background: s.done ? T.success+'1F' : T.info+'1F',
+                    color: s.done ? T.success : T.info,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    flexShrink:0,
+                  }}><Icon name={s.done?'check':'clipboard'} size={18}/></div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{lbl}</div>
+                    <div style={{ fontSize:11, color:T.text2, marginTop:2, display:'flex', gap:6, flexWrap:'wrap' }}>
+                      <span>{s.time}</span><span>·</span><span>{s.duration} min</span>
+                      <span>·</span><span>{(s.exercises||[]).length} exo</span>
+                      {s.done && <Badge bg={T.successLight} color={T.success}>Terminée</Badge>}
+                    </div>
+                  </div>
+                  <Icon name="chevronRight" size={16} color={T.text3}/>
+                </button>
+              );
+            })}
+          </div>
         </div>
+      )}
+
+      {/* ACTIONS RAPIDES */}
+      <div>
+        <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8 }}>
+          Créer un événement
+        </div>
+        <div style={{ display:'grid', gap:8 }}>
+          {/* Créneau d'entraînement (jour mer/ven en saison) */}
+          {cell.isTraining && (
+            <button onClick={()=>onAction({ type:'newSession', date:cell.iso, time:TRAINING_TIME_START })}
+              style={{
+                padding:'14px 16px', borderRadius:11,
+                background: T.success, color:'#fff', border:'none',
+                cursor:'pointer', textAlign:'left',
+                display:'flex', alignItems:'center', gap:12,
+                fontWeight:600, fontSize:14,
+                boxShadow: T.shadowMd,
+              }}>
+              <div style={{ width:40, height:40, borderRadius:10, background:'rgba(255,255,255,0.18)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                <Icon name="clock" size={22}/>
+              </div>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:14, fontWeight:700, lineHeight:1.2 }}>Créer la séance du créneau</div>
+                <div style={{ fontSize:11, opacity:0.9, marginTop:3 }}>
+                  {TRAINING_TIME_START.replace(':','h')} → {TRAINING_TIME_END.replace(':','h')} (préfait)
+                </div>
+              </div>
+              <Icon name="arrowRight" size={18}/>
+            </button>
+          )}
+          <button onClick={()=>onAction({ type:'newSession', date:cell.iso })}
+            style={{
+              padding:'12px 14px', borderRadius:10,
+              background: T.card2, color:T.text,
+              border:`1.5px solid ${T.border}`,
+              cursor:'pointer', textAlign:'left',
+              display:'flex', alignItems:'center', gap:12,
+            }}
+            onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.info; e.currentTarget.style.background=T.info+'10'}}
+            onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border; e.currentTarget.style.background=T.card2}}>
+            <div style={{ width:36, height:36, borderRadius:9, background:T.info+'1F', color:T.info, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="clipboard" size={18}/>
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:700 }}>Nouvelle séance</div>
+              <div style={{ fontSize:11, color:T.text2, marginTop:2 }}>Entraînement libre (horaire au choix)</div>
+            </div>
+            <Icon name="chevronRight" size={16} color={T.text3}/>
+          </button>
+          <button onClick={()=>onAction({ type:'newMatch', date:cell.iso })}
+            style={{
+              padding:'12px 14px', borderRadius:10,
+              background: T.card2, color:T.text,
+              border:`1.5px solid ${T.border}`,
+              cursor:'pointer', textAlign:'left',
+              display:'flex', alignItems:'center', gap:12,
+            }}
+            onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.accent; e.currentTarget.style.background=T.accent+'10'}}
+            onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border; e.currentTarget.style.background=T.card2}}>
+            <div style={{ width:36, height:36, borderRadius:9, background:T.accent+'1F', color:T.accent, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+              <Icon name="ball" size={18}/>
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:700 }}>Nouveau match</div>
+              <div style={{ fontSize:11, color:T.text2, marginTop:2 }}>Championnat, coupe, amical, tournoi</div>
+            </div>
+            <Icon name="chevronRight" size={16} color={T.text3}/>
+          </button>
+        </div>
+
+        {dayPast && (cell.sessions.length === 0 && cell.matches.length === 0) && (
+          <div style={{ marginTop:10, padding:'8px 12px', background:T.warningLight, borderRadius:8, fontSize:11.5, color:T.warning, fontWeight:600, display:'flex', alignItems:'center', gap:6 }}>
+            <Icon name="info" size={12}/>
+            Date passée — tu peux toujours créer un événement rétroactif
+          </div>
+        )}
       </div>
-    </Card>
+    </Modal>
   );
 }
 
@@ -6006,6 +6278,21 @@ function App() {
   const [evals, setEvals] = usePersist('evals', {});
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState({ message:'', type:'info' });
+  // Cross-page actions (calendar deep-link): { type, date, time?, id? }
+  // type: 'newSession' | 'newMatch' | 'openSession' | 'openMatch'
+  const [pendingAction, setPendingAction] = useState(null);
+
+  function triggerAction(action) {
+    // Detect target tab from action type
+    const tabFor = (t) => {
+      if (t === 'newSession' || t === 'openSession') return 'seances';
+      if (t === 'newMatch'   || t === 'openMatch')   return 'match';
+      return null;
+    };
+    const target = tabFor(action.type);
+    setPendingAction(action);
+    if (target) setTab(target);
+  }
 
   // First-run sample data
   useEffect(() => {
@@ -6044,13 +6331,16 @@ function App() {
           background: T.bg,
         }}>
           {tab === 'home' && <Dashboard players={players} sessions={sessions} matches={matches} evals={evals} goto={setTab} T={T}/>}
-          {tab === 'seances' && <SeancesPage sessions={sessions} setSessions={setSessions} players={players} T={T} showToast={showToast}/>}
+          {tab === 'seances' && <SeancesPage sessions={sessions} setSessions={setSessions} players={players} T={T} showToast={showToast}
+            pendingAction={pendingAction} setPendingAction={setPendingAction}/>}
           {tab === 'groupe' && <GroupePage players={players} setPlayers={setPlayers} evals={evals} T={T}/>}
           {tab === 'match' && <MatchPage matches={matches} setMatches={setMatches} players={players}
             matchPresets={matchPresets} setMatchPresets={setMatchPresets}
-            T={T} showToast={showToast}/>}
+            T={T} showToast={showToast}
+            pendingAction={pendingAction} setPendingAction={setPendingAction}/>}
           {tab === 'suivi' && <SuiviPage players={players} evals={evals} setEvals={setEvals} matches={matches} sessions={sessions} T={T} showToast={showToast}/>}
-          {tab === 'saison' && <SaisonPage players={players} matches={matches} sessions={sessions} evals={evals} T={T} showToast={showToast}/>}
+          {tab === 'saison' && <SaisonPage players={players} matches={matches} sessions={sessions} evals={evals} T={T} showToast={showToast}
+            triggerAction={triggerAction}/>}
         </main>
 
         <BottomNav active={tab} onChange={setTab} T={T}/>
