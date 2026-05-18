@@ -409,6 +409,69 @@ const TAGS_LIBRARY = [
 ];
 
 /* ============================================================
+   ATTENDANCE STATES (5 états)
+============================================================ */
+const ATTENDANCE_STATES = [
+  { id:'present',   label:'Présent',           short:'Présent',   colorKey:'success', icon:'check',       countsPresent:true,  countsAbsent:false, hasNote:false },
+  { id:'late',      label:'Retard',            short:'Retard',    colorKey:'warning', icon:'clock',       countsPresent:true,  countsAbsent:false, hasNote:true },
+  { id:'excused',   label:'Absent excusé',     short:'Excusé',    colorKey:'info',    icon:'noteEdit',    countsPresent:false, countsAbsent:true,  hasNote:true },
+  { id:'unexcused', label:'Absent non excusé', short:'Non exc.',  colorKey:'danger',  icon:'close',       countsPresent:false, countsAbsent:true,  hasNote:false },
+  { id:'injured',   label:'Blessé',            short:'Blessé',    colorKey:'purple',  icon:'alert',       countsPresent:false, countsAbsent:false, hasNote:true },
+];
+
+const ATTENDANCE_NOTE_PRESETS = {
+  late:      ['Bus en retard', 'Embouteillage', 'Sortie école tardive', 'Autre'],
+  excused:   ['Maladie', 'Raison familiale', 'Rdv médical', 'Vacances', 'École', 'Autre'],
+  unexcused: ['Pas de raison', 'Autre'],
+  injured:   ['Cheville', 'Genou', 'Cuisse / ischio', 'Mollet', 'Hanche', 'Bras / épaule', 'Maux de dos', 'Autre'],
+};
+
+/* Helpers attendance */
+function getAttendance(session, pid) {
+  const a = session && session.attendance && session.attendance[pid];
+  if (!a) return { status:'present', note:'', lateMinutes:0 };
+  if (typeof a === 'string') {
+    // Migration depuis ancienne version (string)
+    const map = { present:'present', late:'late', absent:'unexcused' };
+    return { status: map[a] || 'present', note:'', lateMinutes:0 };
+  }
+  return { status: a.status || 'present', note: a.note || '', lateMinutes: a.lateMinutes || 0 };
+}
+function setAttendanceFor(session, pid, partial) {
+  const cur = getAttendance(session, pid);
+  return {
+    ...session,
+    attendance: { ...(session.attendance || {}), [pid]: { ...cur, ...partial } }
+  };
+}
+function attendanceCountsFor(session, players) {
+  const counts = { present:0, late:0, excused:0, unexcused:0, injured:0 };
+  (players || []).forEach(p => {
+    const a = getAttendance(session, p.id);
+    if (counts[a.status] !== undefined) counts[a.status]++;
+  });
+  return counts;
+}
+/* Stats joueur sur saison (séances done uniquement) */
+function playerAttendanceStats(sessions, pid) {
+  const done = (sessions || []).filter(s => s.done);
+  const counts = { present:0, late:0, excused:0, unexcused:0, injured:0 };
+  done.forEach(s => {
+    const a = getAttendance(s, pid);
+    if (counts[a.status] !== undefined) counts[a.status]++;
+  });
+  const total = done.length;
+  const attended = counts.present + counts.late;
+  const absences = counts.excused + counts.unexcused;
+  return {
+    total, attended, absences,
+    ...counts,
+    rate: total > 0 ? attended / total : 0,
+    unexcusedRate: total > 0 ? counts.unexcused / total : 0,
+  };
+}
+
+/* ============================================================
    MATCH constants
 ============================================================ */
 const MATCH_TYPES = [
@@ -2212,6 +2275,217 @@ function SeancesPage({ sessions, setSessions, players, T, showToast }) {
 }
 
 /* ============================================================
+   ATTENDANCE SECTION (présences avec 5 états + notes + actions globales)
+============================================================ */
+function AttendanceSection({ session, players, T, setStatusFor, setNoteFor, setLateMinFor, markAll, resetAttendance, attCounts }) {
+  const [filter, setFilter] = useState('all');
+  const [expandedNotes, setExpandedNotes] = useState({}); // {pid: true}
+
+  function toggleNote(pid) {
+    setExpandedNotes(prev => ({ ...prev, [pid]: !prev[pid] }));
+  }
+
+  const filteredPlayers = useMemo(() => {
+    if (filter === 'all') return players;
+    return players.filter(p => getAttendance(session, p.id).status === filter);
+  }, [players, session, filter]);
+
+  const totalPresent = attCounts.present + attCounts.late;
+  const totalAbsent = attCounts.excused + attCounts.unexcused;
+  const totalInjured = attCounts.injured;
+
+  return (
+    <Card padding={16} style={{ marginBottom:16 }}>
+      <SectionTitle>Présences</SectionTitle>
+
+      {/* Stats résumé */}
+      <div style={{
+        display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(80px,1fr))', gap:8, marginBottom:12,
+      }}>
+        <div style={{ padding:'10px 8px', background:T.successLight, borderRadius:9, textAlign:'center', border:`1px solid ${T.success}40` }}>
+          <div style={{ fontSize:20, fontWeight:800, color:T.success, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{totalPresent}</div>
+          <div style={{ fontSize:10, fontWeight:700, color:T.success, textTransform:'uppercase', letterSpacing:0.4, marginTop:3 }}>présents</div>
+        </div>
+        <div style={{ padding:'10px 8px', background:T.warningLight, borderRadius:9, textAlign:'center', border:`1px solid ${T.warning}40` }}>
+          <div style={{ fontSize:20, fontWeight:800, color:T.warning, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{attCounts.late}</div>
+          <div style={{ fontSize:10, fontWeight:700, color:T.warning, textTransform:'uppercase', letterSpacing:0.4, marginTop:3 }}>retards</div>
+        </div>
+        <div style={{ padding:'10px 8px', background:T.dangerLight, borderRadius:9, textAlign:'center', border:`1px solid ${T.danger}40` }}>
+          <div style={{ fontSize:20, fontWeight:800, color:T.danger, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{totalAbsent}</div>
+          <div style={{ fontSize:10, fontWeight:700, color:T.danger, textTransform:'uppercase', letterSpacing:0.4, marginTop:3 }}>absents</div>
+        </div>
+        <div style={{ padding:'10px 8px', background:T.purple+'18', borderRadius:9, textAlign:'center', border:`1px solid ${T.purple}40` }}>
+          <div style={{ fontSize:20, fontWeight:800, color:T.purple, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{totalInjured}</div>
+          <div style={{ fontSize:10, fontWeight:700, color:T.purple, textTransform:'uppercase', letterSpacing:0.4, marginTop:3 }}>blessés</div>
+        </div>
+        <div style={{ padding:'10px 8px', background:T.card2, borderRadius:9, textAlign:'center', border:`1px solid ${T.border}` }}>
+          <div style={{ fontSize:20, fontWeight:800, color:T.text, lineHeight:1, fontVariantNumeric:'tabular-nums' }}>{players.length>0?Math.round(totalPresent/players.length*100):0}%</div>
+          <div style={{ fontSize:10, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.4, marginTop:3 }}>taux</div>
+        </div>
+      </div>
+
+      {/* Actions globales */}
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14, paddingBottom:14, borderBottom:`1px solid ${T.border}` }}>
+        <Btn size="sm" variant="success" icon="check" onClick={()=>markAll('present')}>Tous présents</Btn>
+        <Btn size="sm" variant="secondary" icon="close" onClick={()=>markAll('unexcused')}>Tous absents</Btn>
+        <Btn size="sm" variant="ghost" icon="refresh" onClick={resetAttendance}>Réinitialiser</Btn>
+      </div>
+
+      {/* Filtres */}
+      {players.length > 5 && (
+        <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12 }}>
+          <Chip active={filter==='all'} onClick={()=>setFilter('all')}>Tous ({players.length})</Chip>
+          {ATTENDANCE_STATES.map(st => {
+            const n = attCounts[st.id];
+            if (n === 0) return null;
+            return (
+              <Chip key={st.id} active={filter===st.id} onClick={()=>setFilter(st.id)}
+                color={T[st.colorKey]} icon={st.icon} count={n}>{st.short}</Chip>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Liste joueurs */}
+      {players.length === 0 ? (
+        <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
+      ) : filteredPlayers.length === 0 ? (
+        <EmptyState icon="users" title="Aucun joueur" message="Aucun joueur ne correspond au filtre"/>
+      ) : (
+        <div style={{ display:'grid', gap:10 }}>
+          {filteredPlayers.map(p => {
+            const att = getAttendance(session, p.id);
+            const state = ATTENDANCE_STATES.find(s => s.id === att.status);
+            const color = T[state.colorKey];
+            const isExpanded = !!expandedNotes[p.id];
+            const hasNote = att.note && att.note.trim();
+            return (
+              <div key={p.id} style={{
+                background:T.card2, borderRadius:11,
+                border:`1.5px solid ${color}50`,
+                padding:'10px 12px',
+                transition:'border-color 0.15s',
+              }}>
+                {/* Top row: avatar + name + status badge */}
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                  <Avatar name={`${p.firstName} ${p.lastName}`} size={36}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text, lineHeight:1.2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      #{p.number || '?'} {p.firstName} {p.lastName}
+                    </div>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, marginTop:3 }}>
+                      <Icon name={state.icon} size={11} color={color}/>
+                      <span style={{ fontSize:11, fontWeight:600, color }}>{state.label}</span>
+                      {att.status === 'late' && att.lateMinutes > 0 && (
+                        <span style={{ fontSize:11, color:T.warning, fontWeight:600 }}>· +{att.lateMinutes} min</span>
+                      )}
+                    </div>
+                  </div>
+                  {state.hasNote && (
+                    <IconBtn
+                      icon={isExpanded || hasNote ? 'noteEdit' : 'plus'}
+                      size={30}
+                      title={hasNote ? 'Modifier la note' : 'Ajouter une note'}
+                      bg={hasNote ? T.accentLight : undefined}
+                      color={hasNote ? T.accent : undefined}
+                      onClick={()=>toggleNote(p.id)}/>
+                  )}
+                </div>
+
+                {/* Status buttons */}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:4 }}>
+                  {ATTENDANCE_STATES.map(st => {
+                    const stColor = T[st.colorKey];
+                    const isActive = att.status === st.id;
+                    return (
+                      <button key={st.id}
+                        onClick={()=>{
+                          setStatusFor(p.id, st.id);
+                          if (st.hasNote && !hasNote) setExpandedNotes(prev=>({...prev, [p.id]:true}));
+                        }}
+                        title={st.label}
+                        style={{
+                          padding:'7px 4px', borderRadius:7,
+                          background: isActive ? stColor : T.card3,
+                          color: isActive ? '#fff' : T.text2,
+                          border:`1px solid ${isActive ? stColor : 'transparent'}`,
+                          cursor:'pointer', transition:'all 0.12s',
+                          display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+                          fontWeight:600,
+                        }}>
+                        <Icon name={st.icon} size={14}/>
+                        <span style={{ fontSize:9, fontWeight:700, letterSpacing:0.2 }}>{st.short}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Note expandable */}
+                {isExpanded && state.hasNote && (
+                  <div className="slide-down" style={{ marginTop:10, paddingTop:10, borderTop:`1px solid ${T.border}` }}>
+                    {att.status === 'late' && (
+                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                        <span style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.5 }}>Retard de</span>
+                        <input type="number" min="0" max="120" value={att.lateMinutes || ''}
+                          onChange={e=>setLateMinFor(p.id, Number(e.target.value)||0)}
+                          placeholder="0"
+                          style={{
+                            width:60, padding:'4px 8px', fontSize:13,
+                            background:T.input, color:T.text,
+                            border:`1.5px solid ${T.inputBorder}`,
+                            borderRadius:7, textAlign:'center', fontVariantNumeric:'tabular-nums',
+                          }}/>
+                        <span style={{ fontSize:11, color:T.text2 }}>minutes</span>
+                      </div>
+                    )}
+                    {/* Note presets */}
+                    {(ATTENDANCE_NOTE_PRESETS[att.status] || []).length > 0 && (
+                      <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8 }}>
+                        {ATTENDANCE_NOTE_PRESETS[att.status].map(preset => (
+                          <Chip key={preset} active={att.note === preset}
+                            onClick={()=>setNoteFor(p.id, att.note===preset?'':preset)}
+                            style={{ fontSize:11, padding:'4px 10px' }}>
+                            {preset}
+                          </Chip>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      value={att.note || ''} onChange={e=>setNoteFor(p.id, e.target.value)}
+                      placeholder={att.status==='late'?'Raison du retard...':att.status==='injured'?'Type de blessure / précisions...':'Note ou précision...'}
+                      style={{
+                        width:'100%', padding:'7px 10px', fontSize:12.5,
+                        background:T.input, color:T.text,
+                        border:`1.5px solid ${T.inputBorder}`,
+                        borderRadius:7,
+                      }}/>
+                  </div>
+                )}
+
+                {/* Note collapsed preview */}
+                {!isExpanded && hasNote && (
+                  <div style={{
+                    marginTop:8, padding:'6px 10px', background:T.card3, borderRadius:7,
+                    fontSize:11.5, color:T.text2, fontStyle:'italic',
+                    display:'flex', alignItems:'center', gap:6,
+                  }}>
+                    <Icon name="noteEdit" size={11} color={T.text3}/>
+                    <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{att.note}</span>
+                    {att.status === 'late' && att.lateMinutes > 0 && (
+                      <span style={{ color:T.warning, fontWeight:700 }}>+{att.lateMinutes}min</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* ============================================================
    SESSION BUILDER
 ============================================================ */
 function SessionBuilder({ session, setSession, onSave, onCancel, onDelete, onLive, players, T, confirmDelete, setConfirmDelete, deleteSession }) {
@@ -2243,14 +2517,33 @@ function SessionBuilder({ session, setSession, onSave, onCancel, onDelete, onLiv
     [newOrder[idx], newOrder[target]] = [newOrder[target], newOrder[idx]];
     setSession({ ...session, exercises: newOrder });
   }
-  function toggleAttendance(pid) {
-    const cur = session.attendance[pid] || 'present';
-    const next = cur === 'present' ? 'absent' : (cur === 'absent' ? 'late' : 'present');
-    setSession({ ...session, attendance: { ...session.attendance, [pid]: next } });
+  function setStatusFor(pid, status) {
+    setSession(setAttendanceFor(session, pid, { status }));
+  }
+  function setNoteFor(pid, note) {
+    setSession(setAttendanceFor(session, pid, { note }));
+  }
+  function setLateMinFor(pid, lateMinutes) {
+    setSession(setAttendanceFor(session, pid, { lateMinutes }));
+  }
+  function markAll(status) {
+    const newAttendance = {};
+    players.forEach(p => {
+      const cur = getAttendance(session, p.id);
+      newAttendance[p.id] = { ...cur, status };
+    });
+    setSession({ ...session, attendance: newAttendance });
+  }
+  function resetAttendance() {
+    setSession({ ...session, attendance: {} });
+  }
+  function copyFromLastSession() {
+    // not implemented yet — placeholder for future
   }
 
   const totalDuration = session.exercises.reduce((sum,eid) => sum + (EXERCISES.find(e=>e.id===eid)?.dur||0), 0);
-  const presentCount = Object.values(session.attendance).filter(v=>v==='present').length;
+  const attCounts = attendanceCountsFor(session, players);
+  const presentCount = attCounts.present + attCounts.late;
 
   return (
     <PageContainer>
@@ -2337,37 +2630,10 @@ function SessionBuilder({ session, setSession, onSave, onCancel, onDelete, onLiv
       </Card>
 
       {/* Attendance */}
-      <Card padding={16} style={{ marginBottom:16 }}>
-        <SectionTitle>Présences ({presentCount}/{players.length})</SectionTitle>
-        {players.length === 0 ? (
-          <EmptyState icon="users" title="Aucun joueur" message="Ajoute des joueurs dans Groupe"/>
-        ) : (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:8 }}>
-            {players.map(p => {
-              const status = session.attendance[p.id] || 'present';
-              const colors = { present:T.success, absent:T.danger, late:T.warning };
-              const labels = { present:'Présent', absent:'Absent', late:'Retard' };
-              return (
-                <button key={p.id} onClick={()=>toggleAttendance(p.id)}
-                  style={{
-                    display:'flex', alignItems:'center', gap:8,
-                    padding:'8px 12px', background:T.card2, borderRadius:10,
-                    border:`1.5px solid ${colors[status]}`, cursor:'pointer',
-                    transition:'all 0.15s', textAlign:'left',
-                  }}>
-                  <Avatar name={`${p.firstName} ${p.lastName}`} size={32}/>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:12, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                      {p.firstName} {p.lastName?p.lastName[0]+'.':''}
-                    </div>
-                    <div style={{ fontSize:10, color:colors[status], fontWeight:600 }}>{labels[status]}</div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+      <AttendanceSection session={session} players={players} T={T}
+        setStatusFor={setStatusFor} setNoteFor={setNoteFor} setLateMinFor={setLateMinFor}
+        markAll={markAll} resetAttendance={resetAttendance}
+        attCounts={attCounts}/>
 
       {/* Notes */}
       <Card padding={16}>
@@ -3179,7 +3445,115 @@ function MatchLive({ match, setMatch, players, onEnd, onCancel, T }) {
 /* ============================================================
    SUIVI (Player evaluations)
 ============================================================ */
-function SuiviPage({ players, evals, setEvals, matches, T, showToast }) {
+/* ============================================================
+   PLAYER ATTENDANCE CARD (stats saison par joueur)
+============================================================ */
+function PlayerAttendanceCard({ player, sessions, T }) {
+  const stats = useMemo(() => playerAttendanceStats(sessions, player.id), [sessions, player.id]);
+  const recentSessions = useMemo(() => {
+    return (sessions||[])
+      .filter(s => s.done)
+      .sort((a,b) => b.date.localeCompare(a.date))
+      .slice(0, 10);
+  }, [sessions]);
+
+  if (stats.total === 0) {
+    return (
+      <Card padding={16} style={{ marginBottom:14 }}>
+        <SectionTitle>Présences saison</SectionTitle>
+        <EmptyState icon="clock" title="Aucune séance terminée" message="Les statistiques apparaîtront après la première séance terminée"/>
+      </Card>
+    );
+  }
+
+  const rateColor = stats.rate >= 0.85 ? T.success : (stats.rate >= 0.70 ? T.warning : T.danger);
+  return (
+    <Card padding={16} style={{ marginBottom:14 }}>
+      <SectionTitle>Présences saison ({stats.total} séances)</SectionTitle>
+
+      {/* Taux principal */}
+      <div style={{
+        padding:16, background:`linear-gradient(135deg, ${rateColor}18 0%, ${T.card2} 100%)`,
+        borderRadius:12, border:`1px solid ${rateColor}40`,
+        display:'flex', alignItems:'center', gap:14, marginBottom:14,
+      }}>
+        <div style={{
+          width:64, height:64, borderRadius:32,
+          background:rateColor, color:'#fff',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          fontSize:22, fontWeight:800, fontVariantNumeric:'tabular-nums',
+          flexShrink:0, letterSpacing:-0.5,
+        }}>{Math.round(stats.rate*100)}%</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:4 }}>Taux de présence</div>
+          <div style={{ fontSize:12, color:T.text2, lineHeight:1.4 }}>
+            <strong style={{ color:T.success }}>{stats.attended}</strong> présent{stats.attended>1?'s':''} (dont <strong>{stats.late}</strong> retard{stats.late>1?'s':''}) ·
+            <strong style={{ color:T.danger }}> {stats.absences}</strong> absent{stats.absences>1?'s':''}
+            {stats.injured > 0 && <> · <strong style={{ color:T.purple }}>{stats.injured}</strong> blessé{stats.injured>1?'s':''}</>}
+          </div>
+        </div>
+      </div>
+
+      {/* Grille détail par état */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(70px,1fr))', gap:8, marginBottom:14 }}>
+        {ATTENDANCE_STATES.map(st => {
+          const color = T[st.colorKey];
+          const n = stats[st.id];
+          return (
+            <div key={st.id} style={{
+              padding:'10px 6px', background:T.card2, borderRadius:9,
+              border:`1px solid ${T.border}`, textAlign:'center',
+            }}>
+              <Icon name={st.icon} size={14} color={color}/>
+              <div style={{ fontSize:18, fontWeight:800, color:T.text, lineHeight:1, marginTop:5, fontVariantNumeric:'tabular-nums' }}>{n}</div>
+              <div style={{ fontSize:9, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.3, marginTop:3 }}>{st.short}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Alerte si trop d'absences non excusées */}
+      {stats.unexcused >= 2 && (
+        <div style={{
+          padding:'10px 12px', background:T.dangerLight, borderRadius:9,
+          border:`1px solid ${T.danger}40`,
+          display:'flex', alignItems:'center', gap:8, marginBottom:14,
+        }}>
+          <Icon name="alert" size={14} color={T.danger}/>
+          <span style={{ fontSize:12, color:T.danger, fontWeight:600 }}>
+            {stats.unexcused} absence{stats.unexcused>1?'s':''} non excusée{stats.unexcused>1?'s':''} cette saison
+          </span>
+        </div>
+      )}
+
+      {/* Frise chronologique 10 dernières séances */}
+      <div>
+        <div style={{ fontSize:11, fontWeight:700, color:T.text2, textTransform:'uppercase', letterSpacing:0.7, marginBottom:8 }}>10 dernières séances</div>
+        <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+          {recentSessions.map(s => {
+            const att = getAttendance(s, player.id);
+            const st = ATTENDANCE_STATES.find(x => x.id === att.status);
+            const color = T[st.colorKey];
+            return (
+              <div key={s.id} title={`${dateFmt(s.date)} — ${st.label}${att.note?` (${att.note})`:''}`}
+                style={{
+                  width:36, padding:'6px 4px', borderRadius:7,
+                  background:color, color:'#fff',
+                  display:'flex', flexDirection:'column', alignItems:'center', gap:2,
+                  cursor:'default',
+                }}>
+                <Icon name={st.icon} size={11}/>
+                <span style={{ fontSize:9, fontWeight:700, lineHeight:1 }}>{new Date(s.date).getDate()}/{new Date(s.date).getMonth()+1}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SuiviPage({ players, evals, setEvals, matches, sessions, T, showToast }) {
   const [selectedPid, setSelectedPid] = useState(null);
   const [date, setDate] = useState(todayIso());
   const [tab, setTab] = useState(0); // 0=team 1=player
@@ -3371,6 +3745,9 @@ function SuiviPage({ players, evals, setEvals, matches, T, showToast }) {
                   placeholder="Observations, points forts, axes à travailler..."/>
               </Card>
 
+              {/* Présences saison */}
+              <PlayerAttendanceCard player={selectedPlayer} sessions={sessions} T={T}/>
+
               {/* Historique */}
               <Card padding={16}>
                 <SectionTitle>Historique des évaluations</SectionTitle>
@@ -3461,7 +3838,7 @@ function SaisonPage({ players, matches, sessions, evals, T, showToast }) {
     <PageContainer>
       <PageHeader title="Saison" subtitle="Bilan global et statistiques"/>
 
-      <Tabs tabs={['Vue d\'ensemble','Calendrier','Temps de jeu']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
+      <Tabs tabs={['Vue d\'ensemble','Calendrier','Temps de jeu','Présences']} active={tab} onChange={setTab} style={{ marginBottom:16 }}/>
 
       {tab === 0 && (
         <>
@@ -3549,7 +3926,144 @@ function SaisonPage({ players, matches, sessions, evals, T, showToast }) {
           )}
         </Card>
       )}
+
+      {tab === 3 && <TeamAttendanceTab players={players} sessions={sessions} T={T}/>}
     </PageContainer>
+  );
+}
+
+/* ============================================================
+   TEAM ATTENDANCE TAB (présences saison équipe)
+============================================================ */
+function TeamAttendanceTab({ players, sessions, T }) {
+  const doneSessions = useMemo(() => (sessions||[]).filter(s => s.done), [sessions]);
+  const playerRows = useMemo(() => {
+    return (players||[])
+      .map(p => ({ player:p, stats: playerAttendanceStats(sessions, p.id) }))
+      .sort((a,b) => b.stats.rate - a.stats.rate);
+  }, [players, sessions]);
+
+  const teamAvg = useMemo(() => {
+    if (playerRows.length === 0 || doneSessions.length === 0) return 0;
+    const totalRate = playerRows.reduce((s,r) => s + r.stats.rate, 0);
+    return totalRate / playerRows.length;
+  }, [playerRows, doneSessions]);
+
+  if (doneSessions.length === 0) {
+    return (
+      <Card>
+        <EmptyState icon="clock" title="Aucune séance terminée"
+          message="Les statistiques de présence apparaîtront après ta première séance terminée"/>
+      </Card>
+    );
+  }
+
+  const teamColor = teamAvg >= 0.85 ? T.success : (teamAvg >= 0.70 ? T.warning : T.danger);
+
+  return (
+    <>
+      {/* Vue d'ensemble équipe */}
+      <Card padding={20} style={{ marginBottom:14 }}>
+        <SectionTitle>Présence moyenne ({doneSessions.length} séances)</SectionTitle>
+        <div style={{
+          padding:18, background:`linear-gradient(135deg, ${teamColor}18 0%, ${T.card2} 100%)`,
+          borderRadius:12, border:`1px solid ${teamColor}40`,
+          display:'flex', alignItems:'center', gap:16,
+        }}>
+          <div style={{
+            width:76, height:76, borderRadius:38,
+            background:teamColor, color:'#fff',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:24, fontWeight:800, fontVariantNumeric:'tabular-nums',
+            flexShrink:0, letterSpacing:-0.5,
+          }}>{Math.round(teamAvg*100)}%</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:T.text, marginBottom:4 }}>Taux de présence moyen équipe</div>
+            <div style={{ fontSize:12, color:T.text2, lineHeight:1.5 }}>
+              Sur {doneSessions.length} séance{doneSessions.length>1?'s':''} terminée{doneSessions.length>1?'s':''} cette saison
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Classement joueurs */}
+      <Card padding={16} style={{ marginBottom:14 }}>
+        <SectionTitle>Classement par assiduité</SectionTitle>
+        {playerRows.length === 0 ? (
+          <EmptyState icon="users" title="Aucun joueur"/>
+        ) : (
+          <div style={{ display:'grid', gap:6 }}>
+            {playerRows.map((r, i) => {
+              const rateColor = r.stats.rate >= 0.85 ? T.success : (r.stats.rate >= 0.70 ? T.warning : T.danger);
+              const pos = POSITIONS.find(x => x.id === r.player.position);
+              return (
+                <div key={r.player.id} style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  padding:'10px 12px', background:T.card2, borderRadius:10,
+                  border:`1px solid ${T.border}`,
+                }}>
+                  <div style={{
+                    width:24, height:24, borderRadius:12,
+                    background: i<3 && r.stats.rate >= 0.85 ? T.gold : T.card3,
+                    color: i<3 && r.stats.rate >= 0.85 ? '#1C1C1E' : T.text2,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    fontSize:11, fontWeight:800, flexShrink:0,
+                  }}>{i+1}</div>
+                  <Avatar name={`${r.player.firstName} ${r.player.lastName}`} size={36} color={pos?.color}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                      #{r.player.number || '?'} {r.player.firstName} {r.player.lastName}
+                    </div>
+                    <div style={{ fontSize:11, color:T.text2, marginTop:2, display:'flex', gap:8, flexWrap:'wrap' }}>
+                      <span style={{ color:T.success }}>{r.stats.present} prés.</span>
+                      {r.stats.late > 0 && <span style={{ color:T.warning }}>{r.stats.late} ret.</span>}
+                      {r.stats.excused > 0 && <span style={{ color:T.info }}>{r.stats.excused} exc.</span>}
+                      {r.stats.unexcused > 0 && <span style={{ color:T.danger, fontWeight:700 }}>{r.stats.unexcused} non exc.</span>}
+                      {r.stats.injured > 0 && <span style={{ color:T.purple }}>{r.stats.injured} bles.</span>}
+                    </div>
+                  </div>
+                  <div style={{
+                    padding:'6px 12px', borderRadius:9,
+                    background:rateColor+'20', color:rateColor,
+                    fontSize:14, fontWeight:800, fontVariantNumeric:'tabular-nums',
+                    minWidth:64, textAlign:'center',
+                  }}>{Math.round(r.stats.rate*100)}%</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* Alertes */}
+      {playerRows.some(r => r.stats.unexcused >= 2) && (
+        <Card padding={16}>
+          <SectionTitle>Alertes — absences non excusées</SectionTitle>
+          <div style={{ display:'grid', gap:6 }}>
+            {playerRows
+              .filter(r => r.stats.unexcused >= 2)
+              .sort((a,b) => b.stats.unexcused - a.stats.unexcused)
+              .map(r => (
+                <div key={r.player.id} style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  padding:'10px 12px', background:T.dangerLight, borderRadius:10,
+                  border:`1px solid ${T.danger}40`,
+                }}>
+                  <Icon name="alert" size={16} color={T.danger}/>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:T.text }}>
+                      #{r.player.number} {r.player.firstName} {r.player.lastName}
+                    </div>
+                    <div style={{ fontSize:11, color:T.danger, fontWeight:600 }}>
+                      {r.stats.unexcused} absence{r.stats.unexcused>1?'s':''} non excusée{r.stats.unexcused>1?'s':''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </Card>
+      )}
+    </>
   );
 }
 
@@ -3867,7 +4381,7 @@ function App() {
           {tab === 'seances' && <SeancesPage sessions={sessions} setSessions={setSessions} players={players} T={T} showToast={showToast}/>}
           {tab === 'groupe' && <GroupePage players={players} setPlayers={setPlayers} evals={evals} T={T}/>}
           {tab === 'match' && <MatchPage matches={matches} setMatches={setMatches} players={players} T={T} showToast={showToast}/>}
-          {tab === 'suivi' && <SuiviPage players={players} evals={evals} setEvals={setEvals} matches={matches} T={T} showToast={showToast}/>}
+          {tab === 'suivi' && <SuiviPage players={players} evals={evals} setEvals={setEvals} matches={matches} sessions={sessions} T={T} showToast={showToast}/>}
           {tab === 'saison' && <SaisonPage players={players} matches={matches} sessions={sessions} evals={evals} T={T} showToast={showToast}/>}
         </main>
 
