@@ -4402,29 +4402,41 @@ function InteractiveField({ form, lineup, players, T, selectedPid, onSlotClick, 
             }}>
             {/* CIRCLE */}
             <div style={{
+              position:'relative',
               width:size, height:size, borderRadius:'50%',
               background: player
                 ? (isSelected ? T.accent : '#FAFAFA')
-                : 'rgba(0,0,0,0.45)',
+                : 'rgba(0,0,0,0.55)',
               border: player
                 ? `2px solid ${isSelected ? '#fff' : posColor}`
-                : `1.5px dashed ${posColor}AA`,
+                : `2px dashed rgba(255,255,255,0.75)`,
               display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize: player ? (compact ? 12 : 14) : (compact ? 9 : 10),
+              fontSize: player ? (compact ? 12 : 14) : (compact ? 10 : 11),
               fontWeight:800,
               color: player
                 ? (isSelected ? '#fff' : '#0F1419')
-                : posColor,
+                : '#fff',
               boxShadow: isSelected
                 ? `0 0 0 4px ${T.accent}55, 0 3px 10px rgba(0,0,0,0.5)`
-                : (player ? '0 2px 6px rgba(0,0,0,0.35)' : 'none'),
+                : (player ? '0 2px 6px rgba(0,0,0,0.35)' : '0 1px 4px rgba(0,0,0,0.4)'),
               transition:'all 0.18s',
-              letterSpacing: player ? 0 : 0.3,
+              letterSpacing: player ? 0 : 0.5,
+              textShadow: player ? 'none' : '0 1px 2px rgba(0,0,0,0.6)',
             }}>
               {player
                 ? (player.number || (player.firstName?.[0]||'?'))
                 : (pos?.short || slot.pos)
               }
+              {/* Position color dot indicator (only for empty slots) */}
+              {!player && (
+                <div style={{
+                  position:'absolute', top:-3, right:-3,
+                  width:10, height:10, borderRadius:5,
+                  background:posColor,
+                  border:'1.5px solid #fff',
+                  boxShadow:'0 1px 3px rgba(0,0,0,0.4)',
+                }}/>
+              )}
             </div>
             {/* NAME (only filled) */}
             {player && (
